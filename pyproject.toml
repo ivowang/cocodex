@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "coconut"
+version = "0.1.0"
+description = "Serialized Codex collaboration for shared Git repositories"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+coconut = "coconut.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

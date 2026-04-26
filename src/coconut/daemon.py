@@ -1,0 +1,966 @@
+from __future__ import annotations
+
+import sqlite3
+import subprocess
+import threading
+import time
+from pathlib import Path
+from typing import Callable
+
+from .config import CoconutConfig
+from .git import (
+    GitError,
+    add_all,
+    commit,
+    current_head,
+    diff,
+    fast_forward_ref,
+    has_unsafe_git_state,
+    is_dirty,
+    push_ref,
+    reset_hard,
+    update_ref,
+)
+from .state import (
+    SessionRecord,
+    claim_integration_task,
+    connect,
+    dequeue_session,
+    enqueue_session,
+    get_metadata,
+    get_lock,
+    get_session,
+    initialize_schema,
+    list_sessions,
+    list_queue,
+    mark_session_disconnected,
+    record_event,
+    register_session,
+    set_lock,
+    set_metadata,
+    touch_session_heartbeat,
+    transition_session,
+    update_last_seen_main,
+    update_session_runtime,
+)
+from .tasks import IntegrationTask, create_task_id, write_task_file
+from .protocol import decode_message
+from .transport import send_message, serve_forever
+
+
+SKIPPED_STATES = {
+    "abandoned",
+    "blocked",
+    "frozen",
+    "fusing",
+    "publishing",
+    "recovery_required",
+    "snapshot",
+    "verifying",
+}
+
+
+READY_TO_INTEGRATE_STATES = {"clean", "dirty", "queued", "blocked", "recovery_required"}
+INCOMPLETE_INTEGRATION_STATES = {"frozen", "snapshot", "fusing", "verifying", "publishing"}
+EXTERNAL_MAIN_RECOVERY_STATES = {"dirty", "queued"} | INCOMPLETE_INTEGRATION_STATES
+
+ControlSender = Callable[[SessionRecord, dict], dict]
+TaskIdFactory = Callable[[str], str]
+
+
+def detect_disconnected_sessions(
+    db: sqlite3.Connection,
+    now: Callable[[], float] = time.time,
+    timeout: float = 30.0,
+) -> None:
+    now_value = now()
+    lock = get_lock(db)
+    for session in list_sessions(db):
+        if not session.connected or session.last_heartbeat is None:
+            continue
+        heartbeat_age = now_value - session.last_heartbeat
+        if heartbeat_age <= timeout:
+            continue
+
+        reason = f"heartbeat timeout after {heartbeat_age:.1f}s"
+        mark_session_disconnected(db, session.name, reason)
+        if lock is not None and lock["owner"] == session.name:
+            task_id = session.active_task or lock["task_id"]
+            dequeue_session(db, session.name)
+            transition_session(
+                db,
+                session.name,
+                "recovery_required",
+                reason=reason,
+                active_task=task_id,
+                blocked_reason=reason,
+            )
+
+
+def recover_incomplete_sessions(db: sqlite3.Connection) -> None:
+    lock = get_lock(db)
+    recovered: set[str] = set()
+    if lock is not None:
+        owner = get_session(db, lock["owner"])
+        if owner is not None and (
+            owner.active_task != lock["task_id"]
+            or owner.state == "queued"
+        ):
+            reason = "startup recovery from inconsistent integration lock"
+            dequeue_session(db, owner.name)
+            transition_session(
+                db,
+                owner.name,
+                "recovery_required",
+                reason=reason,
+                active_task=lock["task_id"],
+                blocked_reason=reason,
+            )
+            recovered.add(owner.name)
+    for session in list_sessions(db):
+        if session.name in recovered:
+            continue
+        if session.state not in INCOMPLETE_INTEGRATION_STATES:
+            continue
+
+        task_id = session.active_task
+        if lock is not None and lock["owner"] == session.name:
+            task_id = task_id or lock["task_id"]
+        reason = f"startup recovery from {session.state}"
+        dequeue_session(db, session.name)
+        transition_session(
+            db,
+            session.name,
+            "recovery_required",
+            reason=reason,
+            active_task=task_id,
+            blocked_reason=reason,
+        )
+
+
+def detect_external_main_update(
+    repo: Path,
+    db: sqlite3.Connection,
+    config: CoconutConfig,
+) -> bool:
+    observed = get_metadata(db, "last_observed_main")
+    current = current_head(repo, config.main_branch)
+    if observed is None:
+        set_metadata(db, "last_observed_main", current)
+        return False
+    if observed == current:
+        return False
+    if _is_locked_pending_publish_recovery(db, current):
+        return False
+
+    reason = f"main moved externally from {observed} to {current}"
+    for session in list_sessions(db):
+        if (
+            session.state not in EXTERNAL_MAIN_RECOVERY_STATES
+            and session.active_task is None
+        ):
+            continue
+        dequeue_session(db, session.name)
+        transition_session(
+            db,
+            session.name,
+            "recovery_required",
+            reason=reason,
+            active_task=session.active_task,
+            blocked_reason=reason,
+        )
+    record_event(db, "external_main_updated", {"previous": observed, "current": current})
+    set_metadata(db, "last_observed_main", current)
+    return True
+
+
+def _is_locked_pending_publish_recovery(db: sqlite3.Connection, current_main: str) -> bool:
+    lock = get_lock(db)
+    if lock is None:
+        return False
+    session = get_session(db, lock["owner"])
+    pending_publish_reason = session is not None and session.blocked_reason in {
+        "startup recovery from publishing",
+    }
+    if (
+        session is None
+        or session.state != "recovery_required"
+        or session.active_task != lock["task_id"]
+        or not session.blocked_reason
+        or (
+            not session.blocked_reason.startswith("remote push failed")
+            and not pending_publish_reason
+        )
+    ):
+        return False
+    try:
+        return current_head(Path(session.worktree)) == current_main
+    except Exception:
+        return False
+
+
+def scan_dirty_sessions(db: sqlite3.Connection) -> None:
+    for session in list_sessions(db):
+        if session.state in SKIPPED_STATES:
+            continue
+        try:
+            dirty = _session_has_changes(session)
+        except (FileNotFoundError, GitError, RuntimeError) as exc:
+            reason = f"worktree unavailable: {exc}"
+            transition_session(
+                db,
+                session.name,
+                "recovery_required",
+                reason=reason,
+                blocked_reason=reason,
+            )
+            continue
+        if dirty:
+            if session.state not in {"dirty", "queued"}:
+                transition_session(db, session.name, "dirty", reason="worktree changed")
+            enqueue_session(db, session.name)
+
+
+def _session_has_changes(session: SessionRecord) -> bool:
+    worktree = Path(session.worktree)
+    if is_dirty(worktree):
+        return True
+    if session.last_seen_main is None:
+        return False
+    return current_head(worktree) != session.last_seen_main
+
+
+def prepare_integration(
+    repo: Path,
+    db: sqlite3.Connection,
+    config: CoconutConfig,
+    session_name: str,
+    *,
+    task_id: str | None = None,
+    lock_already_held: bool = False,
+) -> Path:
+    session = get_session(db, session_name)
+    if session is None:
+        raise RuntimeError(f"unknown session: {session_name}")
+    worktree = Path(session.worktree)
+    unsafe = has_unsafe_git_state(worktree)
+    if unsafe:
+        transition_session(db, session_name, "blocked", reason=unsafe, blocked_reason=unsafe)
+        raise RuntimeError(f"unsafe Git state: {unsafe}")
+
+    task_id = task_id or create_task_id(session_name)
+    lock_acquired = False
+    no_changes = False
+    if lock_already_held:
+        if get_lock(db) != {"owner": session_name, "task_id": task_id}:
+            raise RuntimeError("integration lock is not held by this task")
+    else:
+        if get_lock(db) is not None:
+            raise RuntimeError("integration lock is already held")
+        set_lock(db, owner=session_name, task_id=task_id)
+        lock_acquired = True
+    try:
+        transition_session(db, session_name, "snapshot", reason="creating snapshot", active_task=task_id)
+        latest_main = current_head(repo, config.main_branch)
+        base = session.last_seen_main or latest_main
+        head = current_head(worktree)
+        if is_dirty(worktree):
+            add_all(worktree)
+            snapshot = commit(worktree, f"coconut snapshot: {session_name} {task_id}")
+        elif head != base:
+            snapshot = head
+        else:
+            no_changes = True
+            raise RuntimeError("no changes to snapshot")
+
+        update_ref(worktree, f"refs/coconut/snapshots/{task_id}", snapshot)
+        diff_summary = diff(worktree, base, snapshot)
+        reset_hard(worktree, latest_main)
+        task = IntegrationTask(
+            task_id=task_id,
+            session=session_name,
+            latest_main=latest_main,
+            last_seen_main=session.last_seen_main,
+            snapshot_commit=snapshot,
+            verify=config.verify,
+            diff_summary=diff_summary,
+        )
+        task_path = write_task_file(repo, task)
+        dequeue_session(db, session_name)
+        transition_session(db, session_name, "fusing", reason="task started", active_task=task_id)
+        return task_path
+    except Exception as exc:
+        if lock_acquired:
+            set_lock(db, owner=None, task_id=None)
+        reason = str(exc) or exc.__class__.__name__
+        if no_changes:
+            transition_session(
+                db,
+                session_name,
+                "blocked",
+                reason=reason,
+                blocked_reason=reason,
+            )
+        else:
+            transition_session(
+                db,
+                session_name,
+                "recovery_required",
+                reason=reason,
+                blocked_reason=reason,
+            )
+        raise
+
+
+def send_control_message(session: SessionRecord, message: dict) -> dict:
+    if not session.control_socket:
+        raise RuntimeError(f"session has no control socket: {session.name}")
+    raw = send_message(Path(session.control_socket), message, timeout=5)
+    return decode_message(raw)
+
+
+def fast_forward_clean_sessions(
+    repo: Path,
+    db: sqlite3.Connection,
+    config: CoconutConfig,
+    main_commit: str,
+) -> None:
+    for session in list_sessions(db):
+        if session.state != "clean" or session.active_task is not None:
+            continue
+
+        worktree = Path(session.worktree)
+        try:
+            if is_dirty(worktree):
+                continue
+            head = current_head(worktree)
+            if session.last_seen_main and head != session.last_seen_main:
+                continue
+            if head == main_commit and session.last_seen_main == main_commit:
+                continue
+            fast_forward_ref(worktree, session.branch, main_commit)
+            update_last_seen_main(db, session.name, main_commit)
+        except Exception as exc:
+            reason = f"clean fast-forward failed: {exc}"
+            transition_session(
+                db,
+                session.name,
+                "recovery_required",
+                reason=reason,
+                blocked_reason=str(exc),
+            )
+
+
+def broadcast_main_updated(
+    db: sqlite3.Connection,
+    main_commit: str,
+    *,
+    send_control: ControlSender = send_control_message,
+) -> None:
+    for session in list_sessions(db):
+        if not session.connected or not session.control_socket:
+            continue
+        try:
+            response = send_control(
+                session,
+                {"type": "main_updated", "session": session.name, "main_commit": main_commit},
+            )
+        except Exception as exc:
+            reason = str(exc) or exc.__class__.__name__
+            mark_session_disconnected(db, session.name, reason)
+            continue
+        if response.get("type") == "error":
+            mark_session_disconnected(db, session.name, response.get("message", "main_updated failed"))
+            continue
+        if not _main_update_response_matches(response, session.name, main_commit):
+            reason = response.get("message") or response.get("reason") or "main_updated ack mismatch"
+            mark_session_disconnected(db, session.name, reason)
+
+
+def process_queue_once(
+    repo: Path,
+    db: sqlite3.Connection,
+    config: CoconutConfig,
+    *,
+    send_control: ControlSender = send_control_message,
+    task_id_factory: TaskIdFactory = create_task_id,
+) -> bool:
+    if get_lock(db) is not None:
+        return False
+
+    for session_name in list_queue(db):
+        session = get_session(db, session_name)
+        if session is None:
+            dequeue_session(db, session_name)
+            continue
+        if session.state not in {"dirty", "queued"}:
+            dequeue_session(db, session_name)
+            continue
+        if not session.connected or not session.control_socket:
+            continue
+        if session.active_task is not None:
+            continue
+
+        task_id = task_id_factory(session.name)
+        claim_integration_task(db, session.name, task_id, reason="freeze requested")
+        try:
+            freeze = send_control(
+                session,
+                {
+                    "type": "freeze",
+                    "session": session.name,
+                    "task_id": task_id,
+                    "reason": "integration lock acquired",
+                },
+            )
+        except Exception as exc:
+            reason = str(exc) or exc.__class__.__name__
+            _stop_queue_attempt(
+                db,
+                session.name,
+                task_id,
+                state="queued",
+                reason=reason,
+                active_task=None,
+            )
+            return False
+        if not _control_response_matches(
+            freeze,
+            expected_type="freeze_ack",
+            session_name=session.name,
+            task_id=task_id,
+        ):
+            reason = freeze.get("message") or freeze.get("reason") or "freeze failed"
+            _stop_queue_attempt(
+                db,
+                session.name,
+                task_id,
+                state="queued",
+                reason=reason,
+                active_task=None,
+            )
+            return False
+
+        transition_session(db, session.name, "frozen", reason="freeze acknowledged", active_task=task_id)
+        try:
+            task_path = prepare_integration(
+                repo,
+                db,
+                config,
+                session.name,
+                task_id=task_id,
+                lock_already_held=True,
+            )
+        except Exception:
+            _release_lock_if_owned(db, session.name, task_id)
+            return False
+        refreshed = get_session(db, session.name)
+        if refreshed is None:
+            raise RuntimeError(f"unknown session after prepare: {session.name}")
+        try:
+            response = send_control(
+                refreshed,
+                {
+                    "type": "start_fusion",
+                    "session": session.name,
+                    "task_id": task_id,
+                    "task_file": str(task_path),
+                },
+            )
+        except Exception as exc:
+            reason = str(exc) or exc.__class__.__name__
+            _stop_queue_attempt(
+                db,
+                session.name,
+                task_id,
+                state="recovery_required",
+                reason=reason,
+                active_task=task_id,
+            )
+            return False
+        if not _control_response_matches(
+            response,
+            expected_type="ack",
+            session_name=session.name,
+            task_id=task_id,
+        ):
+            reason = response.get("message") or response.get("reason") or "start_fusion failed"
+            _stop_queue_attempt(
+                db,
+                session.name,
+                task_id,
+                state="recovery_required",
+                reason=reason,
+                active_task=task_id,
+            )
+            return False
+        _mark_waiting_sessions_queued(db, exclude=session.name)
+        return True
+
+    return False
+
+
+def _mark_waiting_sessions_queued(db: sqlite3.Connection, *, exclude: str) -> None:
+    for session_name in list_queue(db):
+        if session_name == exclude:
+            continue
+        session = get_session(db, session_name)
+        if session is None or session.active_task is not None or session.state != "dirty":
+            continue
+        transition_session(db, session.name, "queued", reason="waiting for integration")
+
+
+def run_verify(worktree: Path, verify: str | None) -> tuple[bool, str]:
+    if not verify:
+        return True, ""
+    result = subprocess.run(
+        verify,
+        cwd=worktree,
+        shell=True,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    return result.returncode == 0, result.stdout
+
+
+def publish_candidate(
+    repo: Path,
+    db: sqlite3.Connection,
+    config: CoconutConfig,
+    session_name: str,
+    task_id: str,
+    candidate: str,
+    *,
+    send_control: ControlSender = send_control_message,
+) -> None:
+    session = get_session(db, session_name)
+    if session is None or session.active_task != task_id:
+        raise RuntimeError("stale or unknown task")
+
+    expected_lock = {"owner": session_name, "task_id": task_id}
+    if get_lock(db) != expected_lock:
+        raise RuntimeError("integration lock is not held by this task")
+    # recovery_required is only retryable after a remote publish failure that
+    # kept the integration lock held for this same session/task.
+    if session.state not in {"fusing", "verifying", "publishing", "recovery_required"}:
+        raise RuntimeError(f"invalid session state for publish: {session.state}")
+
+    worktree = Path(session.worktree)
+    try:
+        unsafe = has_unsafe_git_state(worktree)
+    except Exception as exc:
+        reason = f"worktree unavailable: {exc}"
+        transition_session(
+            db,
+            session_name,
+            "recovery_required",
+            reason=reason,
+            active_task=task_id,
+            blocked_reason=reason,
+        )
+        _release_lock_if_owned(db, session_name, task_id)
+        raise RuntimeError(reason) from exc
+
+    if unsafe:
+        transition_session(
+            db,
+            session_name,
+            "blocked",
+            reason=f"unsafe Git state: {unsafe}",
+            active_task=task_id,
+            blocked_reason=unsafe,
+        )
+        _release_lock_if_owned(db, session_name, task_id)
+        raise RuntimeError(f"unsafe Git state: {unsafe}")
+
+    try:
+        session_head = current_head(worktree)
+    except Exception as exc:
+        reason = f"worktree unavailable: {exc}"
+        transition_session(
+            db,
+            session_name,
+            "recovery_required",
+            reason=reason,
+            active_task=task_id,
+            blocked_reason=reason,
+        )
+        _release_lock_if_owned(db, session_name, task_id)
+        raise RuntimeError(reason) from exc
+
+    if candidate != session_head:
+        reason = "candidate is not current session head"
+        transition_session(
+            db,
+            session_name,
+            "recovery_required",
+            reason=reason,
+            active_task=task_id,
+            blocked_reason=f"{reason}: {candidate} != {session_head}",
+        )
+        _release_lock_if_owned(db, session_name, task_id)
+        raise RuntimeError(reason)
+
+    try:
+        if is_dirty(worktree):
+            reason = "worktree is dirty before verify"
+            _stop_publish(
+                db,
+                session_name,
+                task_id,
+                state="blocked",
+                reason=reason,
+            )
+            return
+    except Exception as exc:
+        reason = f"worktree unavailable: {exc}"
+        _stop_publish(
+            db,
+            session_name,
+            task_id,
+            state="recovery_required",
+            reason=reason,
+        )
+        raise RuntimeError(reason) from exc
+
+    transition_session(db, session_name, "verifying", reason="candidate reported", active_task=task_id)
+    try:
+        ok, output = run_verify(worktree, config.verify)
+    except Exception as exc:
+        reason = f"verify execution failed: {exc}"
+        transition_session(
+            db,
+            session_name,
+            "recovery_required",
+            reason=reason,
+            active_task=task_id,
+            blocked_reason=reason,
+        )
+        _release_lock_if_owned(db, session_name, task_id)
+        raise RuntimeError(reason) from exc
+
+    if not ok:
+        transition_session(
+            db,
+            session_name,
+            "blocked",
+            reason="verify failed",
+            active_task=task_id,
+            blocked_reason=output[-1000:] or "verify failed",
+        )
+        _release_lock_if_owned(db, session_name, task_id)
+        return
+
+    try:
+        verified_head = current_head(worktree)
+        verified_dirty = is_dirty(worktree)
+    except Exception as exc:
+        reason = f"worktree unavailable after verify: {exc}"
+        _stop_publish(
+            db,
+            session_name,
+            task_id,
+            state="recovery_required",
+            reason=reason,
+        )
+        raise RuntimeError(reason) from exc
+
+    if verified_head != candidate:
+        reason = "verify changed session head"
+        _stop_publish(
+            db,
+            session_name,
+            task_id,
+            state="recovery_required",
+            reason=reason,
+            blocked_reason=f"{reason}: {candidate} != {verified_head}",
+        )
+        raise RuntimeError(reason)
+
+    if verified_dirty:
+        reason = "verify changed worktree"
+        _stop_publish(
+            db,
+            session_name,
+            task_id,
+            state="blocked",
+            reason=reason,
+        )
+        return
+
+    transition_session(db, session_name, "publishing", reason="verify passed", active_task=task_id)
+    try:
+        fast_forward_ref(repo, config.main_branch, candidate)
+    except Exception as exc:
+        reason = str(exc) or exc.__class__.__name__
+        transition_session(
+            db,
+            session_name,
+            "recovery_required",
+            reason=reason,
+            active_task=task_id,
+            blocked_reason=reason,
+        )
+        _release_lock_if_owned(db, session_name, task_id)
+        raise
+
+    if config.remote:
+        try:
+            push_ref(repo, config.remote, candidate, f"refs/heads/{config.main_branch}")
+        except Exception as exc:
+            reason = f"remote push failed: {exc}"
+            transition_session(
+                db,
+                session_name,
+                "recovery_required",
+                reason=reason,
+                active_task=task_id,
+                blocked_reason=reason,
+            )
+            raise RuntimeError(reason) from exc
+
+    transition_session(db, session_name, "clean", reason="published", active_task=None)
+    update_last_seen_main(db, session_name, candidate)
+    _release_lock_if_owned(db, session_name, task_id)
+    set_metadata(db, "last_observed_main", candidate)
+    fast_forward_clean_sessions(repo, db, config, candidate)
+    broadcast_main_updated(db, candidate, send_control=send_control)
+
+
+def _stop_publish(
+    db: sqlite3.Connection,
+    session_name: str,
+    task_id: str,
+    *,
+    state: str,
+    reason: str,
+    blocked_reason: str | None = None,
+) -> None:
+    transition_session(
+        db,
+        session_name,
+        state,
+        reason=reason,
+        active_task=task_id,
+        blocked_reason=blocked_reason or reason,
+    )
+    _release_lock_if_owned(db, session_name, task_id)
+
+
+def _stop_queue_attempt(
+    db: sqlite3.Connection,
+    session_name: str,
+    task_id: str,
+    *,
+    state: str,
+    reason: str,
+    active_task: str | None,
+) -> None:
+    transition_session(
+        db,
+        session_name,
+        state,
+        reason=reason,
+        active_task=active_task,
+        blocked_reason=reason,
+    )
+    _release_lock_if_owned(db, session_name, task_id)
+
+
+def _control_response_matches(
+    response: dict,
+    *,
+    expected_type: str,
+    session_name: str,
+    task_id: str,
+) -> bool:
+    return (
+        response.get("type") == expected_type
+        and response.get("session") == session_name
+        and response.get("task_id") == task_id
+    )
+
+
+def _main_update_response_matches(response: dict, session_name: str, main_commit: str) -> bool:
+    return (
+        response.get("type") == "ack"
+        and response.get("session") == session_name
+        and response.get("main_commit") == main_commit
+    )
+
+
+def _release_lock_if_owned(db: sqlite3.Connection, session_name: str, task_id: str) -> None:
+    if get_lock(db) == {"owner": session_name, "task_id": task_id}:
+        set_lock(db, owner=None, task_id=None)
+
+
+def handle_session_message(
+    repo: Path,
+    db: sqlite3.Connection,
+    config: CoconutConfig,
+    message: dict,
+    *,
+    now: Callable[[], float] = time.time,
+) -> dict:
+    message_type = message.get("type")
+    session_name = message.get("session")
+
+    if message_type == "register":
+        branch = message.get("branch") or f"coconut/{session_name}"
+        worktree = message.get("worktree") or str(repo / config.worktree_root / session_name)
+        existing = get_session(db, session_name)
+        if existing is not None:
+            if existing.branch != branch or existing.worktree != worktree:
+                raise RuntimeError(f"conflicting registration for session: {session_name}")
+            update_session_runtime(
+                db,
+                session_name,
+                pid=message.get("pid"),
+                control_socket=message.get("control_socket"),
+                connected=True,
+                heartbeat=now(),
+            )
+            return {"type": "registered", "session": session_name}
+        record = SessionRecord(
+            name=session_name,
+            branch=branch,
+            worktree=worktree,
+            state="clean",
+            last_seen_main=current_head(repo, config.main_branch),
+            active_task=None,
+            blocked_reason=None,
+        )
+        register_session(db, record)
+        update_session_runtime(
+            db,
+            session_name,
+            pid=message.get("pid"),
+            control_socket=message.get("control_socket"),
+            connected=True,
+            heartbeat=now(),
+        )
+        return {"type": "registered", "session": session_name}
+
+    if message_type == "heartbeat":
+        if get_session(db, session_name) is None:
+            raise RuntimeError(f"unknown session: {session_name}")
+        touch_session_heartbeat(db, session_name, now())
+        return {"type": "ack", "session": session_name}
+
+    if message_type == "shutdown":
+        if get_session(db, session_name) is None:
+            raise RuntimeError(f"unknown session: {session_name}")
+        mark_session_disconnected(db, session_name, message.get("reason") or "shutdown")
+        return {"type": "ack", "session": session_name}
+
+    if message_type == "ready_to_integrate":
+        session = get_session(db, session_name)
+        if session is None:
+            raise RuntimeError(f"unknown session: {session_name}")
+        if session.state not in READY_TO_INTEGRATE_STATES:
+            raise RuntimeError(f"invalid session state for ready_to_integrate: {session.state}")
+        if session.active_task is not None:
+            raise RuntimeError(f"session has active task: {session_name}")
+        transition_session(db, session_name, "queued", reason="session ready", active_task=None)
+        enqueue_session(db, session_name)
+        return {"type": "queued", "session": session_name}
+
+    if message_type == "freeze_ack":
+        task_id = message["task_id"]
+        session = get_session(db, session_name)
+        if session is None or session.active_task != task_id:
+            raise RuntimeError("stale or unknown task")
+        if session.state != "queued":
+            raise RuntimeError(f"invalid session state for freeze_ack: {session.state}")
+        transition_session(
+            db,
+            session_name,
+            "frozen",
+            reason="session frozen",
+            active_task=task_id,
+        )
+        return {"type": "ack", "session": session_name, "task_id": task_id}
+
+    if message_type == "fusion_done":
+        task_id = message["task_id"]
+        session = get_session(db, session_name)
+        if session is None:
+            raise RuntimeError(f"unknown session: {session_name}")
+        candidate = current_head(Path(session.worktree))
+        publish_candidate(repo, db, config, session_name, task_id, candidate)
+        updated = get_session(db, session_name)
+        if updated is not None and updated.state == "blocked":
+            return {
+                "type": "blocked",
+                "session": session_name,
+                "task_id": task_id,
+                "reason": updated.blocked_reason or "blocked",
+            }
+        return {"type": "ack", "session": session_name, "task_id": task_id}
+
+    if message_type == "fusion_blocked":
+        task_id = message["task_id"]
+        session = get_session(db, session_name)
+        if session is None or session.active_task != task_id:
+            raise RuntimeError("stale or unknown task")
+        if session.state != "fusing":
+            raise RuntimeError(f"invalid session state for fusion_blocked: {session.state}")
+        expected_lock = {"owner": session_name, "task_id": task_id}
+        if get_lock(db) != expected_lock:
+            raise RuntimeError("integration lock is not held by this task")
+        reason = message.get("reason") or "fusion blocked"
+        transition_session(
+            db,
+            session_name,
+            "blocked",
+            reason=reason,
+            active_task=task_id,
+            blocked_reason=reason,
+        )
+        _release_lock_if_owned(db, session_name, task_id)
+        return {
+            "type": "blocked",
+            "session": session_name,
+            "task_id": task_id,
+            "reason": reason,
+        }
+
+    return {"type": "ack", "session": session_name}
+
+
+def start_socket_server(
+    repo: Path,
+    db: sqlite3.Connection,
+    config: CoconutConfig,
+) -> threading.Event:
+    stop_event = threading.Event()
+    socket_path = repo / config.socket_path
+
+    def handler(message: dict) -> dict:
+        request_db = connect(repo)
+        try:
+            initialize_schema(request_db)
+            return handle_session_message(repo, request_db, config, message)
+        finally:
+            request_db.close()
+
+    _ = db
+    thread = serve_forever(socket_path, handler, stop_event=stop_event)
+    thread.start()
+    return stop_event
+
+
+def run_daemon(repo: Path, db: sqlite3.Connection, config: CoconutConfig) -> int:
+    recover_incomplete_sessions(db)
+    stop_event = start_socket_server(repo, db, config)
+    try:
+        while True:
+            detect_disconnected_sessions(db)
+            if not detect_external_main_update(repo, db, config):
+                scan_dirty_sessions(db)
+                process_queue_once(repo, db, config)
+            time.sleep(config.dirty_interval_s)
+    finally:
+        stop_event.set()
