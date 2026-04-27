@@ -15,7 +15,6 @@ TASK_MESSAGE_TYPES = {
     "freeze_ack",
     "freeze_busy",
     "fusion_done",
-    "fusion_blocked",
 }
 
 KNOWN_TYPES = TASK_MESSAGE_TYPES | {
@@ -26,7 +25,6 @@ KNOWN_TYPES = TASK_MESSAGE_TYPES | {
     "queued",
     "ready_to_integrate",
     "shutdown",
-    "resume",
     "main_updated",
     "error",
 }

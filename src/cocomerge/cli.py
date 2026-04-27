@@ -4,7 +4,7 @@ import argparse
 import sys
 
 
-RECOVERY_COMMANDS = {"resume", "abandon", "done", "block"}
+RECOVERY_COMMANDS = {"resume", "abandon"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -28,15 +28,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     join_parser = subparsers.add_parser("join")
     join_parser.add_argument("session", nargs="?", metavar="user_name")
-    join_parser.add_argument("--name", help=argparse.SUPPRESS)
-    join_parser.add_argument("--git-user-name", help=argparse.SUPPRESS)
-    join_parser.add_argument("--git-user-email", help=argparse.SUPPRESS)
     join_parser.add_argument(
         "--tmux-target",
         help="tmux pane that should receive Cocomerge prompts; prompt injection is opt-in",
     )
-    join_parser.add_argument("--no-auto-prompt", action="store_true", help=argparse.SUPPRESS)
-    join_parser.add_argument("session_command", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
 
     subparsers.add_parser("status")
 
@@ -57,13 +52,6 @@ def build_recovery_parser() -> argparse.ArgumentParser:
     abandon_parser = subparsers.add_parser("abandon")
     abandon_parser.add_argument("session")
 
-    done_parser = subparsers.add_parser("done")
-    done_parser.add_argument("session")
-
-    block_parser = subparsers.add_parser("block")
-    block_parser.add_argument("session")
-    block_parser.add_argument("reason")
-
     return parser
 
 
@@ -71,16 +59,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     raw = sys.argv[1:] if argv is None else list(argv)
     if raw and raw[0] in RECOVERY_COMMANDS:
         return build_recovery_parser().parse_args(raw)
-    if raw and raw[0] == "sync" and len(raw) > 1 and not raw[1].startswith("-"):
-        if len(raw) > 2:
-            raise ValueError("sync accepts at most one optional session name")
-        args = build_parser().parse_args(["sync"])
-        args.session = raw[1]
-        return args
-    args = build_parser().parse_args(raw)
-    if getattr(args, "command", None) == "sync":
-        args.session = None
-    return args
+    return build_parser().parse_args(raw)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -135,32 +114,15 @@ def _main(argv: list[str] | None = None) -> int:
         validate_config(repo, config)
         db = connect(repo)
         initialize_schema(db)
-        session_arg = args.session
-        command = args.session_command
-        if args.name is not None and session_arg is not None and session_arg != args.name:
-            if not command:
-                raise RuntimeError("join received two different session names")
-            command = [session_arg, *command]
-            session_arg = None
-        session_name = session_arg or args.name
+        session_name = args.session
         if session_name is None:
             raise RuntimeError("Usage: cocomerge join <user_name>")
-        if session_arg is not None and args.name is not None and session_arg != args.name:
-            raise RuntimeError("join received two different session names")
-        git_user_name = args.git_user_name
-        git_user_email = args.git_user_email
-        if command and command[0] == "--":
-            command = command[1:]
-        if has_developer(config, session_name):
-            configured_name, configured_email = get_developer_identity(config, session_name)
-            git_user_name = git_user_name or configured_name
-            git_user_email = git_user_email or configured_email
-            if not command:
-                command = get_developer_command(config, session_name)
-        elif args.name is None:
+        if not has_developer(config, session_name):
             raise RuntimeError(
                 f"Developer {session_name!r} is not configured in .cocomerge/config.json"
             )
+        git_user_name, git_user_email = get_developer_identity(config, session_name)
+        command = get_developer_command(config, session_name)
         record = ensure_session_worktree(
             repo,
             config,
@@ -169,16 +131,13 @@ def _main(argv: list[str] | None = None) -> int:
             git_user_name=git_user_name,
             git_user_email=git_user_email,
         )
-        if not command:
-            command = ["codex"]
-        tmux_target = None if args.no_auto_prompt else args.tmux_target
         record, startup_prompt = prepare_join_startup_notice(repo, config, db, record)
         agent = SessionAgent(
             repo=repo,
             config=config,
             record=record,
             command=command,
-            tmux_target=tmux_target,
+            tmux_target=args.tmux_target,
             startup_prompt=startup_prompt,
         )
         control_thread = agent.start_control_server(wait=True)
@@ -223,7 +182,7 @@ def _main(argv: list[str] | None = None) -> int:
         from .config import find_cocomerge_root, load_config, validate_config
         from .protocol import decode_message
         from .session import infer_session_from_cwd, send_completion
-        from .state import connect, get_session, initialize_schema
+        from .state import connect, initialize_schema
         from .transport import send_message
 
         repo = find_cocomerge_root()
@@ -231,12 +190,7 @@ def _main(argv: list[str] | None = None) -> int:
         validate_config(repo, config)
         db = connect(repo)
         initialize_schema(db)
-        if args.session is None:
-            session = infer_session_from_cwd(db)
-        else:
-            session = get_session(db, args.session)
-        if session is None:
-            raise RuntimeError(f"Unknown session: {args.session}")
+        session = infer_session_from_cwd(db)
         remote_errors = [_sync_remote_best_effort(repo, config)]
         if session.active_task is not None:
             if session.state in {"fusing", "blocked", "recovery_required"}:
@@ -332,57 +286,7 @@ def _main(argv: list[str] | None = None) -> int:
             set_lock(db, owner=None, task_id=None)
         print(f"Abandoned {args.session}")
         return 0
-    if args.command == "done":
-        from .config import find_cocomerge_root, load_config
-        from .session import send_completion
-        from .state import connect, get_session, initialize_schema
-
-        repo = find_cocomerge_root()
-        config = load_config(repo)
-        db = connect(repo)
-        initialize_schema(db)
-        session = get_session(db, args.session)
-        if session is None:
-            raise RuntimeError(f"Unknown session: {args.session}")
-        response = send_completion(repo / config.socket_path, session)
-        print(_format_completion_response(response, session, expected_type="ack"))
-        return 0
-    if args.command == "block":
-        from .config import find_cocomerge_root, load_config
-        from .session import send_completion
-        from .state import connect, get_session, initialize_schema
-
-        repo = find_cocomerge_root()
-        config = load_config(repo)
-        db = connect(repo)
-        initialize_schema(db)
-        session = get_session(db, args.session)
-        if session is None:
-            raise RuntimeError(f"Unknown session: {args.session}")
-        response = send_completion(
-            repo / config.socket_path,
-            session,
-            blocked_reason=args.reason,
-        )
-        print(_format_completion_response(response, session, expected_type="blocked"))
-        return 0
-
     return 0
-
-
-def _format_completion_response(response: dict, session, *, expected_type: str) -> str:
-    if response.get("type") == "error":
-        raise RuntimeError(response["message"])
-    message_type = response.get("type", "response")
-    response_session = response.get("session")
-    task_id = response.get("task_id")
-    if (
-        message_type != expected_type
-        or response_session != session.name
-        or task_id != session.active_task
-    ):
-        raise RuntimeError("Unexpected completion response")
-    return f"{message_type} {response_session} {task_id}"
 
 
 def _format_sync_completion_response(response: dict, session) -> str:

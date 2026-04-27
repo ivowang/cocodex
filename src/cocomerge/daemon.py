@@ -896,33 +896,6 @@ def handle_session_message(
             }
         return {"type": "ack", "session": session_name, "task_id": task_id}
 
-    if message_type == "fusion_blocked":
-        task_id = message["task_id"]
-        session = get_session(db, session_name)
-        if session is None or session.active_task != task_id:
-            raise RuntimeError("stale or unknown task")
-        if session.state != "fusing":
-            raise RuntimeError(f"invalid session state for fusion_blocked: {session.state}")
-        expected_lock = {"owner": session_name, "task_id": task_id}
-        if get_lock(db) != expected_lock:
-            raise RuntimeError("integration lock is not held by this task")
-        reason = message.get("reason") or "fusion blocked"
-        transition_session(
-            db,
-            session_name,
-            "blocked",
-            reason=reason,
-            active_task=task_id,
-            blocked_reason=reason,
-        )
-        _release_lock_if_owned(db, session_name, task_id)
-        return {
-            "type": "blocked",
-            "session": session_name,
-            "task_id": task_id,
-            "reason": reason,
-        }
-
     return {"type": "ack", "session": session_name}
 
 

@@ -60,8 +60,8 @@ cocomerge status
 cocomerge log
 ```
 
-Recovery commands exist for operators, but they are not part of the normal
-developer workflow.
+`resume` and `abandon` recovery commands exist for operators, but they are not
+part of the normal developer workflow.
 
 ## Installation
 

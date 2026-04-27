@@ -53,7 +53,7 @@ cocomerge status
 cocomerge log
 ```
 
-恢复命令只面向 operator，不属于普通开发者工作流。
+`resume` 和 `abandon` 恢复命令只面向 operator，不属于普通开发者工作流。
 
 ## 安装
 

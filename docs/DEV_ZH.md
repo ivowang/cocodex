@@ -31,7 +31,7 @@ daemon 和 session agent 通过 Unix domain socket 传输 JSONL 消息。Git 操
 
 `init_config()` 默认拒绝覆盖已有配置，除非 `cocomerge init --force` 传入 `force=True`。配置写入使用临时文件加 atomic replace，避免写入失败后留下半截 JSON。
 
-`load_config()` 会丢弃历史 `verify` key。Cocomerge 不再保存 repo-wide verification command：生成的 sync task 会要求拥有该任务的 Codex 为这次语义融合自行设计并执行合适验证。
+`load_config()` 只接受上面列出的公开配置 schema。未知 key 会被明确报告为配置错误，避免过期或拼写错误的设置静默影响 session。Cocomerge 不保存 repo-wide verification command：生成的 sync task 会要求拥有该任务的 Codex 为这次语义融合自行设计并执行合适验证。
 
 ## 产品命令模型
 
@@ -41,7 +41,7 @@ daemon 和 session agent 通过 Unix domain socket 传输 JSONL 消息。Git 操
 cocomerge sync
 ```
 
-这个命令在 managed worktree 中执行。CLI 会用当前 Git worktree root 匹配已注册的 `SessionRecord.worktree` 来推断 session。显式 session 参数仍保留给 main repository 中的 operator/internal 用法。
+这个命令在 managed worktree 中执行。CLI 会用当前 Git worktree root 匹配已注册的 `SessionRecord.worktree` 来推断 session。`sync` 刻意不接受 session name，这样开发者不会误触发其他用户 worktree 的同步。
 
 内部实现中，`sync` 会根据状态映射到不同协议动作：
 
@@ -51,11 +51,11 @@ cocomerge sync
 
 执行协议动作前，以及本地 catch-up 或 publish 成功后，CLI 会在配置了 `config.remote` 时尝试 best-effort remote sync。该操作会 force-push/prune 本地 `refs/heads/*` 到 remote；如果存在 Cocomerge 内部 `refs/cocomerge/*` namespace，也会一并推送。失败或超时只打印 warning，不应改变 `sync` 的退出状态。
 
-`done`、`block`、`resume`、`abandon` 等 legacy/internal 命令只面向 operator 或兼容场景，不属于普通开发者工作流。
+`resume` 和 `abandon` 是 operator 恢复命令。它们不会出现在顶层 help 中，也不属于普通开发者工作流。
 
 daemon 不会自动把 dirty session 入队。dirty work 会留在本地，直到 owner 显式运行 `sync`。
 
-`join <name>` 会从 `config.developers[name]` 解析开发者配置。Cocomerge 使用其中的 `git_user_name` 和 `git_user_email`，启用 Git `extensions.worktreeConfig`，并用 `git config --worktree` 写入 `user.name`/`user.email`，这样同一个服务器账号下的不同开发者也能在各自 managed worktree 中使用不同提交身份。如果该 entry 没有 `command`，Cocomerge 默认启动 `codex`；否则使用配置里的 JSON 字符串数组。旧的 `--name` 和 `--git-user-*` flag 仅作为兼容入口保留，不属于用户工作流。
+`join <name>` 会从 `config.developers[name]` 解析开发者配置。Cocomerge 使用其中的 `git_user_name` 和 `git_user_email`，启用 Git `extensions.worktreeConfig`，并用 `git config --worktree` 写入 `user.name`/`user.email`，这样同一个服务器账号下的不同开发者也能在各自 managed worktree 中使用不同提交身份。如果该 entry 没有 `command`，Cocomerge 默认启动 `codex`；否则使用配置里的 JSON 字符串数组。CLI 不再接受 Git identity 覆盖参数；配置文件是开发者 identity 和启动命令的唯一来源。
 
 每次 `join` 启动 session command 前，Cocomerge 都会调用 `prepare_join_startup_notice()`，让重启行为变成显式流程：
 
@@ -100,7 +100,7 @@ lock 和 `active_task` 必须保持一致。队列处理通过 `claim_integratio
 重要状态如下：
 
 - `clean`：相对已知 main 没有待集成改动。
-- `dirty`：存在需要集成的本地改动或 commit。当前不再由 daemon 自动扫描入队，只保留给显式 sync 路径或历史状态。
+- `dirty`：存在需要集成的本地改动或 commit。该状态由显式 sync 路径进入，不由 daemon 自动扫描入队。
 - `queued`：等待 daemon 开始 integration。
 - `snapshot`：daemon 正在准备 snapshot。
 - `frozen`：session 已确认 freeze。
@@ -120,7 +120,6 @@ Session 发给 daemon：
 - `shutdown`：标记 session 断开。
 - `ready_to_integrate`：`cocomerge sync` 使用的内部入队请求。
 - `fusion_done`：`cocomerge sync` 使用的内部 candidate-ready 信号。
-- `fusion_blocked`：legacy/internal 阻塞信号。
 
 Daemon 发给 session：
 
@@ -150,7 +149,7 @@ active-task `sync` 会触发 `publish_candidate()`。
 
 - session 和 task id 匹配；
 - integration lock 属于同一个 session/task；
-- recovery retry 只限历史 remote-push recovery 或 startup-publishing recovery；
+- recovery retry 只限 remote-push recovery 或 startup-publishing recovery；
 - worktree 没有未完成的危险 Git 操作；
 - candidate 等于 session `HEAD`；
 - candidate 不是 task base commit，除非 Codex 创建了显式 no-op commit；

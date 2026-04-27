@@ -51,16 +51,19 @@ startup, so operators can add developers incrementally.
 from `cocomerge init --force`. Config writes use a temporary file followed by
 atomic replace so a failed write does not leave a partially written JSON file.
 
-`load_config()` discards the legacy `verify` key if present. Cocomerge no longer
-stores a repo-wide verification command: the generated sync task requires the
-owning Codex to design and run suitable validation for that semantic merge.
+`load_config()` accepts only the public config schema above. Unknown keys are
+reported as configuration errors, so obsolete or misspelled settings do not
+silently affect a session. Cocomerge does not store a repo-wide verification
+command: the generated sync task requires the owning Codex to design and run
+suitable validation for that semantic merge.
 
 ## Product Command Model
 
 The normal developer command is `cocomerge sync`, run from inside the managed
 worktree. The CLI infers the session by matching the current Git worktree root
-against registered `SessionRecord.worktree` values. A session argument remains
-available for operator/internal use from the main repository.
+against registered `SessionRecord.worktree` values. `sync` intentionally takes
+no session name, so a developer cannot accidentally request synchronization for
+another user's worktree.
 
 Internally, `sync` maps to different protocol actions:
 
@@ -76,9 +79,9 @@ is set. This force-pushes/prunes local `refs/heads/*` to the remote and also
 pushes Cocomerge's internal `refs/cocomerge/*` namespace when it exists. Failures
 or timeouts only produce warnings; they must not change the sync exit status.
 
-Legacy/internal commands such as `done`, `block`, `resume`, and `abandon` are
-operator or compatibility tools. They are intentionally not part of the normal
-developer workflow.
+`resume` and `abandon` are operator recovery commands. They are intentionally
+kept out of the top-level help and are not part of the normal developer
+workflow.
 
 The daemon does not automatically queue dirty sessions. Dirty work stays local
 until the owning session explicitly runs `sync`.
@@ -89,8 +92,8 @@ uses that entry's `git_user_name` and `git_user_email`, enables Git
 `git config --worktree`, so each developer's managed worktree can commit with a
 distinct identity under the shared server account. If the entry has no
 `command`, Cocomerge starts `codex`; otherwise it uses the configured JSON string
-array. Legacy `--name` and `--git-user-*` flags remain as compatibility hooks
-but are not part of the user workflow.
+array. The CLI no longer accepts Git identity overrides; configuration is the
+single source of truth for per-developer identity and launch command.
 
 On every `join`, Cocomerge calls `prepare_join_startup_notice()` before launching
 the session command. This makes restart behavior explicit:
@@ -145,8 +148,8 @@ one SQLite transaction.
 Important states:
 
 - `clean`: no pending work relative to the session's known main.
-- `dirty`: local changes or commits need integration. This is now entered by
-  explicit sync paths or legacy state, not by daemon auto-queueing.
+- `dirty`: local changes or commits need integration. This is entered by
+  explicit sync paths, not by daemon auto-queueing.
 - `queued`: waiting for the daemon to start integration.
 - `snapshot`: the daemon is preparing a snapshot.
 - `frozen`: the session acknowledged freeze.
@@ -168,7 +171,6 @@ Session to daemon:
 - `shutdown`: mark the session disconnected.
 - `ready_to_integrate`: internal queue request used by `cocomerge sync`.
 - `fusion_done`: internal candidate-ready signal used by `cocomerge sync`.
-- `fusion_blocked`: legacy/internal block signal.
 
 Daemon to session:
 
@@ -206,8 +208,8 @@ It checks:
 
 - session and task id match;
 - integration lock is owned by the same session/task;
-- recovery retry is limited to legacy remote-push recovery or
-  startup-publishing recovery;
+- recovery retry is limited to remote-push recovery or startup-publishing
+  recovery;
 - worktree has no unsafe Git operation;
 - reported candidate equals session `HEAD`;
 - candidate is not the task base commit, unless Codex created an explicit

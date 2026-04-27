@@ -9,6 +9,14 @@ from typing import Any
 
 CONFIG_PATH = Path(".cocomerge/config.json")
 DEFAULT_DEVELOPER_COMMAND = ["codex"]
+CONFIG_KEYS = {
+    "main_branch",
+    "remote",
+    "socket_path",
+    "worktree_root",
+    "dirty_interval_s",
+    "developers",
+}
 
 
 @dataclass(frozen=True)
@@ -103,8 +111,18 @@ def load_config(repo: Path) -> CocomergeConfig:
     if not path.exists():
         raise FileNotFoundError(f"{path} does not exist; run cocomerge init first")
     data = json.loads(path.read_text(encoding="utf-8"))
-    data.pop("verify", None)
+    if not isinstance(data, dict):
+        raise RuntimeError(f"{CONFIG_PATH} must contain a JSON object")
     data.setdefault("developers", {})
+    unknown = sorted(set(data) - CONFIG_KEYS)
+    if unknown:
+        raise RuntimeError(
+            f"Unknown key(s) in {CONFIG_PATH}: {', '.join(unknown)}. "
+            "Remove obsolete or misspelled configuration keys."
+        )
+    missing = sorted(CONFIG_KEYS - set(data))
+    if missing:
+        raise RuntimeError(f"Missing required key(s) in {CONFIG_PATH}: {', '.join(missing)}")
     return CocomergeConfig(**data)
 
 

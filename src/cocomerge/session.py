@@ -37,8 +37,8 @@ def ensure_session_worktree(
     db: sqlite3.Connection,
     session: str,
     *,
-    git_user_name: str | None = None,
-    git_user_email: str | None = None,
+    git_user_name: str,
+    git_user_email: str,
 ) -> SessionRecord:
     validate_session_name(session)
     branch = f"cocomerge/{session}"
@@ -103,15 +103,12 @@ def _validate_worktree(worktree: Path, branch: str) -> None:
 def _configure_worktree_identity(
     worktree: Path,
     *,
-    git_user_name: str | None,
-    git_user_email: str | None,
+    git_user_name: str,
+    git_user_email: str,
 ) -> None:
-    if (git_user_name is None) != (git_user_email is None):
-        raise ValueError("--git-user-name and --git-user-email must be provided together")
-    if git_user_name is not None and git_user_email is not None:
-        run_git(worktree, ["config", "extensions.worktreeConfig", "true"])
-        run_git(worktree, ["config", "--worktree", "user.name", git_user_name])
-        run_git(worktree, ["config", "--worktree", "user.email", git_user_email])
+    run_git(worktree, ["config", "extensions.worktreeConfig", "true"])
+    run_git(worktree, ["config", "--worktree", "user.name", git_user_name])
+    run_git(worktree, ["config", "--worktree", "user.email", git_user_email])
 
     missing = [
         key
@@ -453,17 +450,13 @@ def infer_session_from_cwd(db: sqlite3.Connection, cwd: Path | None = None) -> S
 def send_completion(
     socket_path: Path,
     session: SessionRecord,
-    *,
-    blocked_reason: str | None = None,
 ) -> dict:
     if session.active_task is None:
         raise RuntimeError(f"Session {session.name} has no active task")
     message = {
-        "type": "fusion_blocked" if blocked_reason else "fusion_done",
+        "type": "fusion_done",
         "session": session.name,
         "task_id": session.active_task,
     }
-    if blocked_reason:
-        message["reason"] = blocked_reason
     raw = send_message(socket_path, message, timeout=5)
     return decode_message(raw)
