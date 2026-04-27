@@ -38,7 +38,7 @@ command, for example `!coconut sync`.
 
 ## Roles
 
-Operator/startup commands:
+Operator/startup commands, run from the project repository:
 
 ```bash
 coconut init --main main --remote origin
@@ -46,7 +46,8 @@ coconut daemon
 coconut join alice
 ```
 
-Developer collaboration command:
+Developer collaboration command, run from inside that developer's managed
+worktree, usually through Codex as `!coconut sync`:
 
 ```bash
 coconut sync
@@ -103,8 +104,10 @@ Use `--remote origin` only if that remote exists. With a remote configured,
 the server-side repository remains authoritative. Omit `--remote` for
 local-only coordination.
 
-Before developers join, add a top-level `developers` object to
-`.coconut/config.json` while keeping the other keys that `coconut init` wrote:
+Before developers join, edit `.coconut/config.json` and fill in the top-level
+`developers` object. Keep the other keys that `coconut init` wrote; do not
+replace the whole file with only the developer fragment. A typical config looks
+like this:
 
 ```json
 {
@@ -117,9 +120,18 @@ Before developers join, add a top-level `developers` object to
       "git_user_name": "Bob Example",
       "git_user_email": "bob@example.com"
     }
-  }
+  },
+  "dirty_interval_s": 2.0,
+  "main_branch": "main",
+  "remote": "origin",
+  "socket_path": ".coconut/coconut.sock",
+  "worktree_root": ".coconut/worktrees"
 }
 ```
+
+Use `"remote": null` if the repository is local-only. The keys under
+`developers` are the only names accepted by `coconut join <user_name>`, so
+`coconut join alice` requires an `alice` entry.
 
 `command` is optional per developer; when omitted, Coconut starts `codex`. For
 a custom Codex launch, use a JSON string array such as
@@ -139,6 +151,10 @@ Start each Codex session through Coconut from that developer's tmux window:
 coconut join alice
 coconut join bob
 ```
+
+`join` has the same form for first-time use and restart. The developer name
+comes from `.coconut/config.json`; Git identity and the Codex launch command
+come from the matching config entry.
 
 Each joined session gets:
 
@@ -311,5 +327,24 @@ coconut join alice
 coconut status
 coconut log
 ```
+
+## Troubleshooting
+
+`Developer 'alice' is not configured in .coconut/config.json`
+means the operator has not added an `alice` entry under `developers`, or the
+command is being run from a repository with a different Coconut config.
+
+`coconut sync must run inside a Git worktree` or
+`Run coconut sync inside a managed worktree` means the command was not run from
+`.coconut/worktrees/<name>`. Start or re-enter the session with
+`coconut join <name>`, then run `!coconut sync` from that Codex session.
+
+If Coconut prints task and prompt file paths instead of pasting into Codex,
+that is expected unless the session was started with an explicit
+`--tmux-target`. Read the task file in the session worktree and follow it.
+
+Remote sync warnings are non-fatal. Fix the network or Git authentication
+problem when convenient; Coconut retries remote synchronization on later
+`coconut sync` commands.
 
 Implementation details are documented in [docs/DEV.md](docs/DEV.md).

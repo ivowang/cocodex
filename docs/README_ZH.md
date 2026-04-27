@@ -32,7 +32,7 @@ coconut sync
 
 ## 角色分工
 
-Operator 负责初始化和启动：
+Operator 负责初始化和启动；这些命令在项目仓库中执行：
 
 ```bash
 coconut init --main main --remote origin
@@ -40,7 +40,7 @@ coconut daemon
 coconut join alice
 ```
 
-开发者协作时使用：
+开发者协作时使用；这个命令在自己的 managed worktree 中执行，通常是在 Codex 里通过 `!coconut sync` 运行：
 
 ```bash
 coconut sync
@@ -91,7 +91,7 @@ coconut init --main main --remote origin
 
 只有当 `origin` 已经存在时才使用 `--remote origin`。配置 remote 后，`coconut sync` 会用 force-push/prune 的方式把本地 branch refs 同步到该 remote，因此以 server 上的仓库为权威状态。如果只需要本地协调，可以省略 `--remote`。
 
-开发者 join 之前，在 `.coconut/config.json` 中添加顶层 `developers` 对象，同时保留 `coconut init` 写入的其他 key：
+开发者 join 之前，编辑 `.coconut/config.json`，填好顶层 `developers` 对象。保留 `coconut init` 写入的其他 key，不要只用 developer 片段覆盖整个文件。一个典型配置如下：
 
 ```json
 {
@@ -104,9 +104,16 @@ coconut init --main main --remote origin
       "git_user_name": "Bob Example",
       "git_user_email": "bob@example.com"
     }
-  }
+  },
+  "dirty_interval_s": 2.0,
+  "main_branch": "main",
+  "remote": "origin",
+  "socket_path": ".coconut/coconut.sock",
+  "worktree_root": ".coconut/worktrees"
 }
 ```
+
+如果只做本地协调，将 `"remote"` 设为 `null`。`developers` 下面的 key 就是 `coconut join <user_name>` 接受的名字，所以 `coconut join alice` 要求配置中存在 `alice` entry。
 
 每个开发者的 `command` 字段可选；不写时 Coconut 默认启动 `codex`。如果需要自定义 Codex 启动方式，可以写 JSON 字符串数组，例如 `"command": ["codex", "--model", "gpt-5.5"]`。
 
@@ -124,6 +131,8 @@ coconut daemon
 coconut join alice
 coconut join bob
 ```
+
+第一次加入和之后重新加入都使用同一个命令格式。developer name 来自 `.coconut/config.json`；Git identity 和 Codex 启动命令都来自匹配的配置 entry。
 
 每个 joined session 会得到：
 
@@ -262,5 +271,15 @@ coconut join alice
 coconut status
 coconut log
 ```
+
+## 常见问题
+
+`Developer 'alice' is not configured in .coconut/config.json` 表示 operator 还没有在 `developers` 下添加 `alice` entry，或者当前命令运行在另一个 Coconut config 所属的仓库中。
+
+`coconut sync must run inside a Git worktree` 或 `Run coconut sync inside a managed worktree` 表示当前不是在 `.coconut/worktrees/<name>` 里运行。先用 `coconut join <name>` 启动或重新进入对应 session，再从这个 Codex session 中运行 `!coconut sync`。
+
+如果 Coconut 只打印 task 和 prompt 文件路径，而没有自动粘贴进 Codex，这是正常行为，除非启动 session 时显式传了 `--tmux-target`。在对应 worktree 里读取 task file，然后按 task 执行。
+
+remote sync warning 不会阻断本地开发。之后修复网络或 Git 认证问题即可；Coconut 会在后续 `coconut sync` 中重试远程同步。
 
 实现细节请阅读 [docs/DEV_ZH.md](DEV_ZH.md)。

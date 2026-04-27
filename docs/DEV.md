@@ -28,6 +28,29 @@ writes a prompt file next to the task file and prints both paths; if a target
 was configured, it also uses `tmux load-buffer`, `paste-buffer`, and
 `send-keys Enter`.
 
+## Configuration
+
+`coconut init` writes `.coconut/config.json` through `init_config()` in
+`src/coconut/config.py`. The public config schema is:
+
+- `main_branch`: local branch Coconut is allowed to publish.
+- `remote`: optional remote name for best-effort server-ref sync.
+- `socket_path`: daemon Unix socket path.
+- `worktree_root`: root for managed session worktrees.
+- `dirty_interval_s`: retained timing knob for daemon polling.
+- `developers`: object keyed by developer/session name.
+
+Each developer entry must provide `git_user_name` and `git_user_email` before
+that developer can use `coconut join <name>`. The optional `command` field is a
+non-empty JSON string array and defaults to `["codex"]`. `validate_config()`
+checks remote existence, main branch existence, developer object shape, and
+custom command shape. Identity fields are required by `join`, not at daemon
+startup, so operators can add developers incrementally.
+
+`load_config()` discards the legacy `verify` key if present. Coconut no longer
+stores a repo-wide verification command: the generated sync task requires the
+owning Codex to design and run suitable validation for that semantic merge.
+
 ## Product Command Model
 
 The normal developer command is `coconut sync`, run from inside the managed

@@ -16,6 +16,21 @@ daemon 和 session agent 通过 Unix domain socket 传输 JSONL 消息。Git 操
 
 `SessionAgent` 可以把 sync prompt 粘贴到 tmux 中，但只有在 `join` 显式收到 `--tmux-target` 时才会这么做。Coconut 刻意不自动识别 `TMUX_PANE`，因为测试、包装脚本和嵌套 shell 可能继承到错误 Codex 的环境变量。收到 `start_fusion` 后，agent 总会在 task file 旁边写出 prompt file 并打印二者路径；如果配置了目标 pane，它才会额外通过 `tmux load-buffer`、`paste-buffer` 和 `send-keys Enter` 注入 prompt。
 
+## 配置模型
+
+`coconut init` 通过 `src/coconut/config.py` 中的 `init_config()` 写入 `.coconut/config.json`。公开配置 schema 包含：
+
+- `main_branch`：Coconut 可以发布的本地主分支。
+- `remote`：可选 remote 名，用于 best-effort server-ref sync。
+- `socket_path`：daemon Unix socket path。
+- `worktree_root`：managed session worktree 根目录。
+- `dirty_interval_s`：保留的 daemon polling 时间参数。
+- `developers`：以 developer/session name 为 key 的对象。
+
+每个 developer entry 必须提供 `git_user_name` 和 `git_user_email`，之后该开发者才能执行 `coconut join <name>`。可选的 `command` 字段必须是非空 JSON 字符串数组，默认值是 `["codex"]`。`validate_config()` 会检查 remote 是否存在、main branch 是否存在、developer object 形状以及自定义 command 形状。identity 字段由 `join` 要求，而不是 daemon 启动时强制要求，因此 operator 可以逐步添加开发者。
+
+`load_config()` 会丢弃历史 `verify` key。Coconut 不再保存 repo-wide verification command：生成的 sync task 会要求拥有该任务的 Codex 为这次语义融合自行设计并执行合适验证。
+
 ## 产品命令模型
 
 普通开发者命令是：
