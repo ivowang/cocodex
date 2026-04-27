@@ -62,6 +62,19 @@ enables Git `extensions.worktreeConfig` and writes `user.name`/`user.email` with
 distinct identity under the shared server account. If they are not supplied, an
 effective Git identity must already exist.
 
+On every `join`, Coconut calls `prepare_join_startup_notice()` before launching
+the session command. This makes restart behavior explicit:
+
+- active tasks are re-announced with task and validation paths;
+- recoverable `recovery_required` active tasks with an existing task file and
+  matching integration lock are moved back to `fusing`;
+- queued sync requests produce a wait-for-task notice;
+- clean sessions that are only behind `main` are fast-forwarded;
+- local unintegrated work produces a review-before-new-work notice.
+
+`SessionAgent` prints this startup notice after the child command starts. If an
+explicit tmux target was configured, it also pastes the notice into that pane.
+
 ## Generated Session Instructions
 
 `ensure_session_worktree()` writes an `AGENTS.md` file into each managed

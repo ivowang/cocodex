@@ -24,16 +24,20 @@ class SessionAgent:
         record: SessionRecord,
         command: list[str],
         tmux_target: str | None = None,
+        startup_prompt: str | None = None,
         stop_event: threading.Event | None = None,
         heartbeat_interval: float = 2.0,
+        startup_prompt_delay: float = 1.0,
     ) -> None:
         self.repo = repo
         self.config = config
         self.record = record
         self.command = command
         self.tmux_target = tmux_target
+        self.startup_prompt = startup_prompt
         self.stop_event = stop_event or threading.Event()
         self.heartbeat_interval = heartbeat_interval
+        self.startup_prompt_delay = startup_prompt_delay
         self.control_socket = control_socket_path(repo, config, record.name)
 
     def start_control_server(self, *, wait: bool = False, timeout: float = 2.0) -> threading.Thread:
@@ -58,9 +62,14 @@ class SessionAgent:
         heartbeat_thread = self.start_heartbeat()
         try:
             if not self.command:
+                self._emit_startup_prompt()
                 print(str(Path(self.record.worktree)))
                 return 0
-            return subprocess.call(self.command, cwd=self.record.worktree)
+            process = subprocess.Popen(self.command, cwd=self.record.worktree)
+            if self.startup_prompt:
+                time.sleep(self.startup_prompt_delay)
+                self._emit_startup_prompt()
+            return process.wait()
         finally:
             self.stop_event.set()
             self._send_daemon({"type": "shutdown", "session": self.record.name})
@@ -119,6 +128,17 @@ class SessionAgent:
             return decode_message(raw)
         except (OSError, TimeoutError, ProtocolError):
             return None
+
+    def _emit_startup_prompt(self) -> None:
+        if not self.startup_prompt:
+            return
+        print(self.startup_prompt, flush=True)
+        if not self.tmux_target:
+            return
+        try:
+            send_prompt_to_tmux(self.tmux_target, self.startup_prompt, session=self.record.name)
+        except RuntimeError as exc:
+            print(f"Coconut startup prompt injection failed: {exc}", flush=True)
 
 
 def wait_for_control_socket(socket_path: Path, session: str, *, timeout: float = 2.0) -> None:

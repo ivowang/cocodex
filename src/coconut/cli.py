@@ -114,7 +114,7 @@ def _main(argv: list[str] | None = None) -> int:
 
         from .agent import SessionAgent
         from .config import find_coconut_root, load_config, validate_config
-        from .session import ensure_session_worktree, register_with_daemon
+        from .session import ensure_session_worktree, prepare_join_startup_notice, register_with_daemon
         from .state import connect, initialize_schema
 
         repo = find_coconut_root()
@@ -134,12 +134,14 @@ def _main(argv: list[str] | None = None) -> int:
         if command and command[0] == "--":
             command = command[1:]
         tmux_target = None if args.no_auto_prompt else args.tmux_target
+        record, startup_prompt = prepare_join_startup_notice(repo, config, db, record)
         agent = SessionAgent(
             repo=repo,
             config=config,
             record=record,
             command=command,
             tmux_target=tmux_target,
+            startup_prompt=startup_prompt,
         )
         control_thread = agent.start_control_server(wait=True)
         try:

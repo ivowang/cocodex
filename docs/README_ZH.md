@@ -139,6 +139,27 @@ coconut join --name alice \
 
 生成的 `AGENTS.md` 会告诉 Codex 它处在 Coconut 管理的协作 session 中，并说明正常同步只需要在 managed worktree 中运行 `coconut sync`。
 
+## 重启 Session
+
+如果开发者关掉了自己的 Codex 窗口，之后用同一个 session name 重新启动：
+
+```bash
+coconut join --name alice \
+  --git-user-name "Alice Example" \
+  --git-user-email alice@example.com \
+  -- codex
+```
+
+Coconut 会复用 `.coconut/worktrees/alice` 和 `coconut/alice`。`join` 启动时会先检查这个 session 是否有遗留的 Coconut 责任：
+
+- 如果有 active sync task，会重新提示 task file 和 validation file；
+- 如果中断的 task 可以安全恢复，会自动回到 `fusing`；
+- 如果已有 sync request 在 queue 中，会提示 Codex 等待 task；
+- 如果 clean session 只是落后于 `main`，会安全 fast-forward；
+- 如果有尚未集成的本地工作，会提示 Codex 先 review，再决定何时 `coconut sync`。
+
+如果出现 restart notice，先处理 notice，再开始新的 feature 开发。显式传入 `--tmux-target` 时，Coconut 也会把 restart notice 粘贴进对应 Codex pane。
+
 ## `sync` 做什么
 
 ### Clean Session

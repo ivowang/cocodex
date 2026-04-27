@@ -3,18 +3,33 @@ from __future__ import annotations
 import re
 import sqlite3
 import subprocess
+import textwrap
 from pathlib import Path
 
 from .config import CoconutConfig
-from .git import GitError, create_worktree, current_head, run_git
+from .git import GitError, create_worktree, current_head, fast_forward_ref, is_dirty, run_git
 from .protocol import ProtocolError, decode_message
-from .state import SessionRecord, get_session, list_sessions, register_session
+from .state import (
+    SessionRecord,
+    get_lock,
+    get_session,
+    list_sessions,
+    register_session,
+    transition_session,
+    update_last_seen_main,
+)
+from .tasks import task_file_path, validation_file_path
 from .transport import send_message
 
 
 SESSION_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 COCONUT_AGENTS_MARKER = "<!-- coconut-managed-session-agents -->"
 COCONUT_AGENTS_FILE = "AGENTS.md"
+REJOIN_RECOVERABLE_PREFIXES = (
+    "heartbeat timeout",
+    "startup recovery from fusing",
+    "startup recovery from verifying",
+)
 
 
 def ensure_session_worktree(
@@ -169,6 +184,8 @@ def _session_agents_content(*, session: str, branch: str, config: CoconutConfig)
             "There is no fixed project-wide test command. For each sync task, design",
             "and run sufficient validation for the semantic merge, then write the",
             "validation report requested by the task file before running sync again.",
+            "When this Codex session starts or restarts, handle any Coconut restart",
+            "notice before accepting or continuing unrelated feature work.",
             "",
             "During normal collaboration, use one Coconut command:",
             "",
@@ -192,6 +209,194 @@ def _session_agents_content(*, session: str, branch: str, config: CoconutConfig)
             "",
         ]
     )
+
+
+def prepare_join_startup_notice(
+    repo: Path,
+    config: CoconutConfig,
+    db: sqlite3.Connection,
+    session: SessionRecord,
+) -> tuple[SessionRecord, str | None]:
+    refreshed = get_session(db, session.name)
+    if refreshed is None:
+        return session, None
+
+    if refreshed.active_task:
+        refreshed = _recover_rejoinable_task(repo, db, refreshed)
+        return refreshed, _active_task_notice(repo, refreshed)
+
+    if refreshed.state == "queued":
+        return refreshed, _queued_notice(refreshed)
+
+    caught_up = _catch_up_clean_join(repo, config, db, refreshed)
+    if caught_up is not None:
+        return caught_up, _caught_up_notice(config, caught_up)
+
+    if _has_unintegrated_work(refreshed):
+        return refreshed, _local_work_notice(refreshed)
+
+    return refreshed, None
+
+
+def _recover_rejoinable_task(
+    repo: Path,
+    db: sqlite3.Connection,
+    session: SessionRecord,
+) -> SessionRecord:
+    if session.state != "recovery_required" or session.active_task is None:
+        return session
+    lock = get_lock(db)
+    task_path = task_file_path(repo, session.active_task)
+    reason = session.blocked_reason or ""
+    if (
+        lock == {"owner": session.name, "task_id": session.active_task}
+        and task_path.exists()
+        and reason.startswith(REJOIN_RECOVERABLE_PREFIXES)
+    ):
+        transition_session(
+            db,
+            session.name,
+            "fusing",
+            reason="session rejoined active task",
+            active_task=session.active_task,
+        )
+        recovered = get_session(db, session.name)
+        return recovered or session
+    return session
+
+
+def _active_task_notice(repo: Path, session: SessionRecord) -> str:
+    task_id = session.active_task
+    if task_id is None:
+        return ""
+    task_path = task_file_path(repo, task_id)
+    validation_path = validation_file_path(repo, task_id)
+    reason = session.blocked_reason or "none"
+    if not task_path.exists():
+        return textwrap.dedent(
+            f"""
+            Coconut restart notice: this session references a missing sync task file.
+
+            Session: {session.name}
+            State: {session.state}
+            Task file: {task_path}
+            Reason: {reason}
+
+            Do not begin new feature work yet. Run `coconut status` and
+            `coconut log`; an operator should inspect or abandon this task.
+            """
+        ).lstrip()
+    if session.state == "recovery_required":
+        body = [
+            "Coconut restart notice: this session has an active sync task in recovery.",
+            "",
+            f"Session: {session.name}",
+            f"State: {session.state}",
+            f"Task file: {task_path}",
+            f"Validation file: {validation_path}",
+            f"Reason: {reason}",
+            "",
+            "Do not begin new feature work yet. This state may need operator inspection.",
+            "Run `coconut status` and `coconut log`, then either recover this task",
+            "or have an operator abandon it.",
+            "",
+        ]
+        return "\n".join(body)
+
+    body = [
+        "Coconut restart notice: unfinished sync task must be handled first.",
+        "",
+        f"Session: {session.name}",
+        f"State: {session.state}",
+        f"Task file: {task_path}",
+        f"Validation file: {validation_path}",
+    ]
+    if session.blocked_reason:
+        body.append(f"Blocked reason: {session.blocked_reason}")
+    body.extend(
+        [
+            "",
+            "Read the task file now. Treat the current worktree as the latest main branch.",
+            "Finish the semantic merge before starting new feature work. If the candidate",
+            "is already committed, make sure the validation report exists and run:",
+            "",
+            "    coconut sync",
+            "",
+        ]
+    )
+    return "\n".join(body)
+
+
+def _queued_notice(session: SessionRecord) -> str:
+    return textwrap.dedent(
+        f"""
+        Coconut restart notice: this session already has a sync request queued.
+
+        Session: {session.name}
+        State: queued
+
+        Do not start unrelated feature work yet. Keep this Codex session running
+        and wait for Coconut to deliver the sync task. If nothing happens, run
+        `coconut status` to check whether the daemon and integration lock are healthy.
+        """
+    ).lstrip()
+
+
+def _catch_up_clean_join(
+    repo: Path,
+    config: CoconutConfig,
+    db: sqlite3.Connection,
+    session: SessionRecord,
+) -> SessionRecord | None:
+    if session.state != "clean" or session.last_seen_main is None:
+        return None
+    worktree = Path(session.worktree)
+    if is_dirty(worktree):
+        return None
+    head = current_head(worktree)
+    latest_main = current_head(repo, config.main_branch)
+    if head != session.last_seen_main or head == latest_main:
+        return None
+    fast_forward_ref(worktree, session.branch, latest_main)
+    update_last_seen_main(db, session.name, latest_main)
+    return get_session(db, session.name) or session
+
+
+def _caught_up_notice(config: CoconutConfig, session: SessionRecord) -> str:
+    return textwrap.dedent(
+        f"""
+        Coconut restart notice: this session was safely caught up to latest `{config.main_branch}`.
+
+        Session: {session.name}
+
+        You can continue normal development from the managed worktree.
+        """
+    ).lstrip()
+
+
+def _has_unintegrated_work(session: SessionRecord) -> bool:
+    worktree = Path(session.worktree)
+    if is_dirty(worktree):
+        return True
+    if session.last_seen_main is None:
+        return False
+    return current_head(worktree) != session.last_seen_main
+
+
+def _local_work_notice(session: SessionRecord) -> str:
+    return textwrap.dedent(
+        f"""
+        Coconut restart notice: this session has local work that is not integrated into main.
+
+        Session: {session.name}
+        Worktree: {session.worktree}
+
+        Before starting unrelated new work, review the current changes. When the
+        feature is ready to integrate, run:
+
+            coconut sync
+        """
+    ).lstrip()
 
 
 def register_with_daemon(

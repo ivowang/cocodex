@@ -161,6 +161,32 @@ The generated `AGENTS.md` tells Codex that it is in a Coconut-managed
 collaboration session and that normal synchronization uses only
 `coconut sync` from inside the managed worktree.
 
+## Restarting A Session
+
+If a developer closes their Codex window, restart with the same session name:
+
+```bash
+coconut join --name alice \
+  --git-user-name "Alice Example" \
+  --git-user-email alice@example.com \
+  -- codex
+```
+
+Coconut reuses `.coconut/worktrees/alice` and `coconut/alice`. On startup,
+`join` checks for unfinished Coconut responsibilities before normal
+development continues:
+
+- an active sync task is re-announced with its task and validation file paths;
+- a safely recoverable interrupted task is moved back to `fusing`;
+- a queued sync request is reported so Codex waits for the task;
+- a clean session that only fell behind `main` is fast-forwarded;
+- local unintegrated work is reported so Codex reviews it before starting
+  unrelated work.
+
+If a restart notice appears, handle that notice before accepting new feature
+work. With an explicit `--tmux-target`, Coconut also pastes the restart notice
+into the Codex pane.
+
 ## What `sync` Does
 
 ### Clean Session

@@ -45,6 +45,11 @@ def validation_file_path(repo: Path, task_id: str) -> Path:
     return repo / ".coconut" / "tasks" / f"{task_id}.validation.md"
 
 
+def task_file_path(repo: Path, task_id: str) -> Path:
+    _validate_task_id(task_id)
+    return repo / ".coconut" / "tasks" / f"{task_id}.md"
+
+
 def validate_task_report(repo: Path, task_id: str) -> str | None:
     path = validation_file_path(repo, task_id)
     if not path.exists():
@@ -66,7 +71,7 @@ def write_task_file(repo: Path, task: IntegrationTask) -> Path:
     _validate_task_id(task.task_id)
     tasks_dir = repo / ".coconut" / "tasks"
     tasks_dir.mkdir(parents=True, exist_ok=True)
-    path = tasks_dir / f"{task.task_id}.md"
+    path = task_file_path(repo, task.task_id)
     validation_path = validation_file_path(repo, task.task_id)
     last_seen = task.last_seen_main if task.last_seen_main else "unknown"
     diff_fence = _diff_fence(task.diff_summary)
