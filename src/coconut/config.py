@@ -12,7 +12,6 @@ CONFIG_PATH = Path(".coconut/config.json")
 @dataclass(frozen=True)
 class CoconutConfig:
     main_branch: str
-    verify: str | None
     remote: str | None
     socket_path: str
     worktree_root: str
@@ -68,7 +67,6 @@ def init_config(
     repo: Path,
     *,
     main_branch: str,
-    verify: str | None,
     remote: str | None,
     dirty_interval_s: float = 2.0,
 ) -> CoconutConfig:
@@ -76,7 +74,6 @@ def init_config(
     _validate_remote(repo, remote)
     config = CoconutConfig(
         main_branch=main_branch,
-        verify=verify,
         remote=remote,
         socket_path=".coconut/coconut.sock",
         worktree_root=".coconut/worktrees",
@@ -98,6 +95,7 @@ def load_config(repo: Path) -> CoconutConfig:
     if not path.exists():
         raise FileNotFoundError(f"{path} does not exist; run coconut init first")
     data = json.loads(path.read_text(encoding="utf-8"))
+    data.pop("verify", None)
     return CoconutConfig(**data)
 
 

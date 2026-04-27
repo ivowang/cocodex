@@ -136,23 +136,31 @@ def wait_for_control_socket(socket_path: Path, session: str, *, timeout: float =
 
 
 def build_sync_prompt(session: str, task_file: Path) -> str:
+    validation_file = task_file.with_name(task_file.stem + ".validation.md")
     return "\n".join(
         [
             "Coconut sync task is ready.",
             "",
             f"Session: {session}",
             f"Task file: {task_file}",
+            f"Validation file: {validation_file}",
+            "",
+            "If this arrives while you are working on another request, first choose a",
+            "safe pause point and preserve that request's remaining intent in your",
+            "session output or notes. Complete this Coconut task, then continue the",
+            "paused work after sync succeeds.",
             "",
             "Read the task file now. Treat the current worktree as the latest main branch.",
             "Re-implement or semantically merge the snapshot feature described there on top",
             "of this latest main. Do not run git pull, git merge main, or git push main.",
             "",
             "When the candidate is complete:",
-            "1. run the configured verification or the task's recommended checks;",
+            "1. design and run sufficient tests or checks for this semantic merge;",
             "2. commit the final candidate with this session's configured Git identity;",
             "3. ensure the worktree is clean;",
-            "4. run `coconut sync` again from this worktree so Coconut can verify,",
-            "publish it, and best-effort sync remote refs.",
+            "4. write the validation report requested by the task file;",
+            "5. run `coconut sync` again from this worktree so Coconut can publish it",
+            "and best-effort sync remote refs.",
             "",
             "If you cannot complete the task safely, stop and explain the blocker in this",
             "session output. Do not run sync again until a candidate is actually ready.",

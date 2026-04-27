@@ -41,7 +41,7 @@ command, for example `!coconut sync`.
 Operator/startup commands:
 
 ```bash
-coconut init --main main --verify "pytest" --remote origin
+coconut init --main main --remote origin
 coconut daemon
 coconut join --name alice \
   --git-user-name "Alice Example" \
@@ -98,7 +98,7 @@ git remote add origin <url>
 Initialize Coconut once:
 
 ```bash
-coconut init --main main --verify "pytest" --remote origin
+coconut init --main main --remote origin
 ```
 
 Use `--remote origin` only if that remote exists. With a remote configured,
@@ -191,15 +191,25 @@ When Alice reaches the front of the queue, Coconut:
 5. prints the task file path inside Alice's Codex terminal.
 
 Alice's Codex reads the task file and re-implements or semantically merges
-Alice's feature on top of the latest `main`. After it commits the final
-candidate and the worktree is clean, it runs the same command again:
+Alice's feature on top of the latest `main`. If the task arrives while Codex is
+working on another request, Codex should pause at a safe point, preserve that
+request's remaining intent, complete the sync task, and then resume the paused
+work after sync succeeds.
+
+For each task, Codex designs and runs sufficient validation for the semantic
+merge. That can mean existing tests, new or updated tests, targeted scripts, or
+manual checks when the project has no suitable test framework. Before running
+sync again, Codex writes the requested validation report under
+`.coconut/tasks/`. After it commits the final candidate and the worktree is
+clean, it runs the same command again:
 
 ```bash
 coconut sync
 ```
 
-Coconut then verifies the candidate, fast-forwards local `main`, best-effort
-syncs the configured remote if one exists, and notifies other sessions.
+Coconut then requires the validation report, fast-forwards local `main`,
+best-effort syncs the configured remote if one exists, and notifies other
+sessions.
 
 If the task cannot be completed safely, Codex should stop and explain the
 blocker in its session output. An operator can inspect `coconut status` and
@@ -248,8 +258,8 @@ Coconut prefers stopping over guessing:
 - a dirty session is not integrated until its owner runs `sync`;
 - only one session owns the integration lock at a time;
 - running `sync` before committing a task candidate is rejected;
-- verification failures keep the task locked so the same session can fix and
-  run `sync` again;
+- missing or insufficient validation reports keep the task locked so the same
+  session can write the report and run `sync` again;
 - remote sync failures do not block local progress; Coconut warns and retries
   on the next `sync`;
 - unexpected recovery states require operator inspection.
@@ -265,7 +275,7 @@ coconut sync
 Common operator commands:
 
 ```bash
-coconut init --main main --verify "pytest" --remote origin
+coconut init --main main --remote origin
 coconut daemon
 coconut join --name alice --git-user-name "Alice Example" --git-user-email alice@example.com -- codex
 coconut status

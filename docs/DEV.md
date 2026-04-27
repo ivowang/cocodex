@@ -39,7 +39,7 @@ Internally, `sync` maps to different protocol actions:
 
 - no active task: request queueing with `ready_to_integrate`;
 - active task in `fusing` or retryable `blocked`: report `fusion_done` and let
-  the daemon verify/publish the current session `HEAD`;
+  the daemon validate/publish the current session `HEAD`;
 - retryable remote publish recovery: report `fusion_done` again to retry the
   publish path.
 
@@ -151,9 +151,9 @@ stores snapshot/base refs under `refs/coconut/`, resets the session worktree to
 latest `main`, writes a task file, then sends `start_fusion`.
 
 The task file is created by `src/coconut/tasks.py`. It includes the snapshot
-commit, latest main, last seen main, diff summary, verification command, and
-the instruction to run `coconut sync` again from the same worktree after
-committing the candidate.
+commit, latest main, last seen main, diff summary, interruption-handling
+guidance, validation-report requirements, and the instruction to run
+`coconut sync` again from the same worktree after committing the candidate.
 
 ## Publishing Flow
 
@@ -169,9 +169,9 @@ It checks:
 - reported candidate equals session `HEAD`;
 - candidate is not the task base commit, unless Codex created an explicit
   no-op commit;
-- worktree is clean before verification;
-- verification passes;
-- verification did not modify `HEAD` or dirty the worktree;
+- worktree is clean before validation;
+- the task validation report exists and has meaningful content;
+- validation did not coincide with `HEAD` changes or dirty the worktree;
 - local `main` can fast-forward to the candidate.
 
 After local publish, Coconut records `last_observed_main`, marks the session

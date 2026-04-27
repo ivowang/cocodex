@@ -29,7 +29,7 @@ coconut sync
 内部实现中，`sync` 会根据状态映射到不同协议动作：
 
 - 没有 active task：通过 `ready_to_integrate` 请求入队；
-- active task 处于 `fusing` 或可重试 `blocked`：通过 `fusion_done` 报告当前 session `HEAD` 是 candidate，让 daemon 验证和发布；
+- active task 处于 `fusing` 或可重试 `blocked`：通过 `fusion_done` 报告当前 session `HEAD` 是 candidate，让 daemon 校验 validation report 并发布；
 - 可重试 remote publish recovery：再次通过 `fusion_done` 重试 publish 路径。
 
 执行协议动作前，以及本地 catch-up 或 publish 成功后，CLI 会在配置了 `config.remote` 时尝试 best-effort remote sync。该操作会 force-push/prune 本地 `refs/heads/*` 到 remote；如果存在 Coconut 内部 `refs/coconut/*` namespace，也会一并推送。失败或超时只打印 warning，不应改变 `sync` 的退出状态。
@@ -113,7 +113,7 @@ daemon loop 依次执行：
 
 `process_queue_once()` 只有在 integration lock 空闲时才会启动任务。它会同时认领 lock 和 active task，发送 `freeze`，准备 snapshot，把 snapshot/base ref 保存到 `refs/coconut/`，将 session worktree 重置到最新 `main`，写出 task file，然后发送 `start_fusion`。
 
-task file 由 `src/coconut/tasks.py` 创建，包含 snapshot commit、latest main、last seen main、diff summary、验证命令，以及提交 candidate 后在同一个 worktree 中再次运行 `coconut sync` 的指令。
+task file 由 `src/coconut/tasks.py` 创建，包含 snapshot commit、latest main、last seen main、diff summary、中断当前开发请求时的处理要求、validation report 要求，以及提交 candidate 后在同一个 worktree 中再次运行 `coconut sync` 的指令。
 
 ## 发布流程
 
@@ -127,9 +127,9 @@ active-task `sync` 会触发 `publish_candidate()`。
 - worktree 没有未完成的危险 Git 操作；
 - candidate 等于 session `HEAD`；
 - candidate 不是 task base commit，除非 Codex 创建了显式 no-op commit；
-- 验证前 worktree 干净；
-- verification 通过；
-- verification 没有改变 `HEAD` 或弄脏 worktree；
+- validation 前 worktree 干净；
+- task validation report 存在且有有效内容；
+- validation 没有伴随 `HEAD` 改变或弄脏 worktree；
 - 本地 `main` 可以 fast-forward 到 candidate。
 
 本地 publish 后，Coconut 会记录 `last_observed_main`、将 session 标记为 clean、释放 lock、fast-forward clean idle sessions，并广播 main update。如果配置了 remote，随后会尝试 best-effort server-ref sync。remote sync 失败不再阻塞本地发布：Coconut 会记录 `remote_sync_failed` event，并在后续 `sync` 中重试。

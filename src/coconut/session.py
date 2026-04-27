@@ -152,7 +152,6 @@ def _ensure_agents_file_is_ignored(worktree: Path) -> None:
 
 
 def _session_agents_content(*, session: str, branch: str, config: CoconutConfig) -> str:
-    verify = config.verify or "no verification command configured"
     remote = config.remote or "no remote configured"
     return "\n".join(
         [
@@ -161,13 +160,15 @@ def _session_agents_content(*, session: str, branch: str, config: CoconutConfig)
             "",
             f"You are working in Coconut session `{session}`.",
             f"The repository main branch is `{config.main_branch}`.",
-            f"The verification command is `{verify}`.",
             f"The configured remote is `{remote}`.",
             "",
             "Coconut coordinates this repository's multi-Codex collaboration.",
             "Do not run `git pull`, `git merge`, or `git push` against the main branch directly.",
             "Do not publish `main` yourself. Coconut is the only writer to local `main`.",
             "If a remote is configured, `coconut sync` best-effort force-syncs server branch refs to that remote.",
+            "There is no fixed project-wide test command. For each sync task, design",
+            "and run sufficient validation for the semantic merge, then write the",
+            "validation report requested by the task file before running sync again.",
             "",
             "During normal collaboration, use one Coconut command:",
             "",
@@ -177,6 +178,8 @@ def _session_agents_content(*, session: str, branch: str, config: CoconutConfig)
             "to print a task file path in this Codex terminal. Read that task file, treat",
             "the current worktree as latest `main`, and re-implement or semantically merge",
             "the snapshot described by the task on top of latest `main`.",
+            "If the task interrupts another request, pause at a safe point, preserve",
+            "the remaining intent, finish the sync task, then resume the paused work.",
             "",
             "After committing the final candidate and making sure the worktree is clean, run sync again:",
             "",

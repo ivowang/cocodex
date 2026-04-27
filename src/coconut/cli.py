@@ -17,7 +17,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     init_parser = subparsers.add_parser("init")
     init_parser.add_argument("--main", default="main")
-    init_parser.add_argument("--verify")
     init_parser.add_argument("--remote")
 
     subparsers.add_parser("daemon")
@@ -94,7 +93,7 @@ def _main(argv: list[str] | None = None) -> int:
         from .state import connect, initialize_schema
 
         repo = find_repo_root()
-        init_config(repo, main_branch=args.main, verify=args.verify, remote=args.remote)
+        init_config(repo, main_branch=args.main, remote=args.remote)
         db = connect(repo)
         initialize_schema(db)
         print(f"Initialized coconut in {repo / '.coconut'}")

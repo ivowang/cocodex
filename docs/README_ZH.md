@@ -35,7 +35,7 @@ coconut sync
 Operator 负责初始化和启动：
 
 ```bash
-coconut init --main main --verify "pytest" --remote origin
+coconut init --main main --remote origin
 coconut daemon
 coconut join --name alice \
   --git-user-name "Alice Example" \
@@ -89,7 +89,7 @@ git remote add origin <url>
 初始化 Coconut：
 
 ```bash
-coconut init --main main --verify "pytest" --remote origin
+coconut init --main main --remote origin
 ```
 
 只有当 `origin` 已经存在时才使用 `--remote origin`。配置 remote 后，`coconut sync` 会用 force-push/prune 的方式把本地 branch refs 同步到该 remote，因此以 server 上的仓库为权威状态。如果只需要本地协调，可以省略 `--remote`。
@@ -167,13 +167,15 @@ coconut sync
 4. 在 `.coconut/tasks/` 下写出 task file；
 5. 在 Alice 的 Codex 终端里打印 task file 路径。
 
-Alice 的 Codex 读取 task file，在最新 `main` 上重新实现或语义融合 Alice 的 feature。提交最终 candidate 并确保 worktree clean 后，再执行同一个命令：
+Alice 的 Codex 读取 task file，在最新 `main` 上重新实现或语义融合 Alice 的 feature。如果这个 task 到来时 Codex 正在处理另一个开发请求，Codex 应该先选择安全暂停点，保留当前请求剩余意图，完成这个 sync task，并在 sync 成功后继续之前暂停的开发工作。
+
+每个 task 都由 Codex 自己为这次语义融合设计并执行充分验证。验证可以包括现有测试、新增或更新测试、定向脚本，或者在项目没有合适测试框架时执行合理的手动检查。再次运行 sync 前，Codex 需要按 task 要求在 `.coconut/tasks/` 下写出 validation report。提交最终 candidate 并确保 worktree clean 后，再执行同一个命令：
 
 ```bash
 coconut sync
 ```
 
-随后 Coconut 会验证 candidate、fast-forward 本地 `main`、在配置了 remote 时 best-effort 同步远端，并通知其他 session。
+随后 Coconut 会要求 validation report 存在、fast-forward 本地 `main`、在配置了 remote 时 best-effort 同步远端，并通知其他 session。
 
 如果 task 无法安全完成，Codex 应该停下来，在 session 输出中说明 blocker。operator 可以通过 `coconut status` 和 `coconut log` 判断如何恢复。
 
@@ -216,7 +218,7 @@ Coconut 的原则是宁可停下来，也不猜测：
 - dirty session 不会被自动集成，必须由 owner 运行 `sync`；
 - 同一时间只有一个 session 持有 integration lock；
 - task candidate 还没提交时再次运行 `sync` 会被拒绝；
-- verification 失败时 task 保持锁定，同一个 session 修复后继续运行 `sync`；
+- validation report 缺失或不足时 task 保持锁定，同一个 session 写好 report 后继续运行 `sync`；
 - remote sync 失败不会阻塞本地进度；Coconut 会打印 warning，并在下一次 `sync` 时重试；
 - 非预期 recovery 状态需要 operator 检查。
 
@@ -231,7 +233,7 @@ coconut sync
 常用 operator 命令：
 
 ```bash
-coconut init --main main --verify "pytest" --remote origin
+coconut init --main main --remote origin
 coconut daemon
 coconut join --name alice --git-user-name "Alice Example" --git-user-email alice@example.com -- codex
 coconut status

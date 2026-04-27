@@ -13,7 +13,6 @@ class IntegrationTask:
     latest_main: str
     last_seen_main: str | None
     snapshot_commit: str
-    verify: str | None
     diff_summary: str
 
 
@@ -41,12 +40,34 @@ def _diff_fence(diff_summary: str) -> str:
     return "`" * max(3, longest_run + 1)
 
 
+def validation_file_path(repo: Path, task_id: str) -> Path:
+    _validate_task_id(task_id)
+    return repo / ".coconut" / "tasks" / f"{task_id}.validation.md"
+
+
+def validate_task_report(repo: Path, task_id: str) -> str | None:
+    path = validation_file_path(repo, task_id)
+    if not path.exists():
+        return (
+            f"validation report is missing: {path}. "
+            "Describe the tests you designed, the checks you ran, and the results, "
+            "then run coconut sync again."
+        )
+    content = path.read_text(encoding="utf-8", errors="replace").strip()
+    if len(content) < 40:
+        return (
+            f"validation report is too short: {path}. "
+            "Record the validation plan, commands or checks run, results, and known risks."
+        )
+    return None
+
+
 def write_task_file(repo: Path, task: IntegrationTask) -> Path:
     _validate_task_id(task.task_id)
     tasks_dir = repo / ".coconut" / "tasks"
     tasks_dir.mkdir(parents=True, exist_ok=True)
     path = tasks_dir / f"{task.task_id}.md"
-    verify_text = task.verify if task.verify else "No verification command configured"
+    validation_path = validation_file_path(repo, task.task_id)
     last_seen = task.last_seen_main if task.last_seen_main else "unknown"
     diff_fence = _diff_fence(task.diff_summary)
     path.write_text(
@@ -59,6 +80,7 @@ def write_task_file(repo: Path, task: IntegrationTask) -> Path:
                 f"Latest main: {task.latest_main}",
                 f"Last seen main: {last_seen}",
                 f"Snapshot commit: {task.snapshot_commit}",
+                f"Validation file: {validation_path}",
                 "",
                 "## Goal",
                 "",
@@ -70,20 +92,42 @@ def write_task_file(repo: Path, task: IntegrationTask) -> Path:
                 "",
                 "Do not push `main` directly.",
                 "",
+                "Safe pause point: if this task interrupts another development request,",
+                "first choose a safe pause point. Preserve the previous request's",
+                "remaining intent in your session output or notes, complete this Coconut",
+                "task, and then continue the paused development work after sync succeeds.",
+                "",
                 "## Snapshot Diff",
                 "",
                 f"{diff_fence}diff",
                 task.diff_summary.rstrip(),
                 diff_fence,
                 "",
-                "## Verification",
+                "## Validation",
                 "",
-                f"Run: {verify_text}",
+                "There is no fixed project-wide test command. You are responsible",
+                "for designing sufficient validation for this semantic merge. Use the",
+                "project's existing tests when relevant, add or update tests when useful,",
+                "and use targeted scripts or manual checks when the repository has no",
+                "suitable automated coverage.",
+                "",
+                "Before running `coconut sync` again, write a validation report to:",
+                f"{validation_path}",
+                "",
+                "The report must summarize:",
+                "",
+                "- the behavior you intended to preserve or add;",
+                "- tests or checks you designed and why they are sufficient;",
+                "- exact commands or manual checks run;",
+                "- results;",
+                "- any remaining risk or intentionally untested area.",
                 "",
                 "## Completion",
                 "",
-                "After committing the final candidate, run `coconut sync` again from this worktree.",
-                "Coconut will verify, publish local `main`, and best-effort sync the configured remote.",
+                "After committing the final candidate and confirming the worktree is clean,",
+                "write the validation report, then run `coconut sync` again from this worktree.",
+                "Coconut will require the validation report, publish local `main`, and",
+                "best-effort sync the configured remote.",
                 "If you cannot complete the integration safely, stop and explain the blocker",
                 "in your session output. An operator can inspect Coconut state and recover.",
                 "",

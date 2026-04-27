@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import sqlite3
-import subprocess
 import threading
 import time
 from pathlib import Path
@@ -42,7 +41,7 @@ from .state import (
     update_last_seen_main,
     update_session_runtime,
 )
-from .tasks import IntegrationTask, create_task_id, write_task_file
+from .tasks import IntegrationTask, create_task_id, validate_task_report, write_task_file
 from .protocol import decode_message
 from .transport import send_message, serve_forever
 
@@ -268,7 +267,6 @@ def prepare_integration(
             latest_main=latest_main,
             last_seen_main=session.last_seen_main,
             snapshot_commit=snapshot,
-            verify=config.verify,
             diff_summary=diff_summary,
         )
         task_path = write_task_file(repo, task)
@@ -496,21 +494,6 @@ def _mark_waiting_sessions_queued(db: sqlite3.Connection, *, exclude: str) -> No
         transition_session(db, session.name, "queued", reason="waiting for integration")
 
 
-def run_verify(worktree: Path, verify: str | None) -> tuple[bool, str]:
-    if not verify:
-        return True, ""
-    result = subprocess.run(
-        verify,
-        cwd=worktree,
-        shell=True,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
-    )
-    return result.returncode == 0, result.stdout
-
-
 def publish_candidate(
     repo: Path,
     db: sqlite3.Connection,
@@ -609,7 +592,7 @@ def publish_candidate(
 
     try:
         if is_dirty(worktree):
-            reason = "worktree is dirty before verify"
+            reason = "worktree is dirty before validation"
             _stop_publish(
                 db,
                 session_name,
@@ -631,29 +614,15 @@ def publish_candidate(
         raise RuntimeError(reason) from exc
 
     transition_session(db, session_name, "verifying", reason="candidate reported", active_task=task_id)
-    try:
-        ok, output = run_verify(worktree, config.verify)
-    except Exception as exc:
-        reason = f"verify execution failed: {exc}"
-        transition_session(
-            db,
-            session_name,
-            "recovery_required",
-            reason=reason,
-            active_task=task_id,
-            blocked_reason=reason,
-        )
-        _release_lock_if_owned(db, session_name, task_id)
-        raise RuntimeError(reason) from exc
-
-    if not ok:
+    validation_error = validate_task_report(repo, task_id)
+    if validation_error is not None:
         transition_session(
             db,
             session_name,
             "blocked",
-            reason="verify failed",
+            reason="validation report required",
             active_task=task_id,
-            blocked_reason=output[-1000:] or "verify failed",
+            blocked_reason=validation_error,
         )
         return
 
@@ -661,7 +630,7 @@ def publish_candidate(
         verified_head = current_head(worktree)
         verified_dirty = is_dirty(worktree)
     except Exception as exc:
-        reason = f"worktree unavailable after verify: {exc}"
+        reason = f"worktree unavailable after validation: {exc}"
         _stop_publish(
             db,
             session_name,
@@ -672,7 +641,7 @@ def publish_candidate(
         raise RuntimeError(reason) from exc
 
     if verified_head != candidate:
-        reason = "verify changed session head"
+        reason = "candidate changed during validation"
         _stop_publish(
             db,
             session_name,
@@ -684,7 +653,7 @@ def publish_candidate(
         raise RuntimeError(reason)
 
     if verified_dirty:
-        reason = "verify changed worktree"
+        reason = "worktree changed during validation"
         _stop_publish(
             db,
             session_name,
@@ -695,7 +664,7 @@ def publish_candidate(
         )
         return
 
-    transition_session(db, session_name, "publishing", reason="verify passed", active_task=task_id)
+    transition_session(db, session_name, "publishing", reason="validation report accepted", active_task=task_id)
     try:
         fast_forward_ref(repo, config.main_branch, candidate)
         set_metadata(db, "last_observed_main", candidate)
