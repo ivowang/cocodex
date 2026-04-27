@@ -133,10 +133,21 @@ config, so Coconut snapshot commits and Codex candidate commits have the right
 author. If identity is not supplied, the worktree must already have effective
 `user.name` and `user.email` Git config.
 
-When `join` runs inside tmux, Coconut detects the current pane and later pastes
-sync prompts directly into the Codex running in that pane. Use `--tmux-target`
-to choose a pane explicitly, or `--no-auto-prompt` to disable prompt injection.
-Without tmux, Coconut still prints the task and prompt file paths.
+Coconut does not automatically infer a tmux pane, because `TMUX_PANE` can leak
+through scripts, tests, or nested shells and target the wrong Codex. By default,
+Coconut prints the task and prompt file paths when a sync task starts. To paste
+sync prompts directly into the Codex pane, opt in explicitly:
+
+```bash
+coconut join --name alice \
+  --git-user-name "Alice Example" \
+  --git-user-email alice@example.com \
+  --tmux-target "$TMUX_PANE" \
+  -- codex
+```
+
+Only pass `--tmux-target "$TMUX_PANE"` when running `join` from the same tmux
+pane that will host that developer's Codex.
 
 The generated `AGENTS.md` tells Codex that it is in a Coconut-managed
 collaboration session and that normal synchronization uses only

@@ -14,7 +14,7 @@ Coconut 是围绕 Git 和 Codex 构建的单机协作编排层，主要由以下
 
 daemon 和 session agent 通过 Unix domain socket 传输 JSONL 消息。Git 操作通过 `src/coconut/git.py` 中的 helper 调用 Git CLI 完成。
 
-当 session 从 tmux 中 join 时，`SessionAgent` 会记录当前 tmux pane。收到 `start_fusion` 后，它会在 task file 旁边写出 prompt file，并通过 `tmux load-buffer`、`paste-buffer` 和 `send-keys Enter` 把简短 sync prompt 粘贴到这个 pane 中正在运行的 Codex。
+`SessionAgent` 可以把 sync prompt 粘贴到 tmux 中，但只有在 `join` 显式收到 `--tmux-target` 时才会这么做。Coconut 刻意不自动识别 `TMUX_PANE`，因为测试、包装脚本和嵌套 shell 可能继承到错误 Codex 的环境变量。收到 `start_fusion` 后，agent 总会在 task file 旁边写出 prompt file 并打印二者路径；如果配置了目标 pane，它才会额外通过 `tmux load-buffer`、`paste-buffer` 和 `send-keys Enter` 注入 prompt。
 
 ## 产品命令模型
 

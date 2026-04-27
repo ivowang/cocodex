@@ -20,10 +20,13 @@ The daemon and session agents communicate over Unix domain sockets with JSONL
 messages. Git operations are delegated to the Git CLI through helpers in
 `src/coconut/git.py`.
 
-When a session is joined from tmux, `SessionAgent` records the current tmux
-pane. On `start_fusion`, it writes a prompt file next to the task file and
-pastes a concise sync prompt into that pane with `tmux load-buffer`,
-`paste-buffer`, and `send-keys Enter`.
+`SessionAgent` can paste sync prompts into tmux, but only when `join` receives
+an explicit `--tmux-target`. Coconut deliberately does not auto-detect
+`TMUX_PANE`: tests, wrapper scripts, and nested shells can inherit that
+environment variable from the wrong Codex. On `start_fusion`, the agent always
+writes a prompt file next to the task file and prints both paths; if a target
+was configured, it also uses `tmux load-buffer`, `paste-buffer`, and
+`send-keys Enter`.
 
 ## Product Command Model
 

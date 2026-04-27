@@ -26,8 +26,11 @@ def build_parser() -> argparse.ArgumentParser:
     join_parser.add_argument("--name", required=True)
     join_parser.add_argument("--git-user-name")
     join_parser.add_argument("--git-user-email")
-    join_parser.add_argument("--tmux-target")
-    join_parser.add_argument("--no-auto-prompt", action="store_true")
+    join_parser.add_argument(
+        "--tmux-target",
+        help="tmux pane that should receive Coconut prompts; prompt injection is opt-in",
+    )
+    join_parser.add_argument("--no-auto-prompt", action="store_true", help=argparse.SUPPRESS)
     join_parser.add_argument("session_command", nargs=argparse.REMAINDER)
 
     subparsers.add_parser("status")
@@ -131,7 +134,7 @@ def _main(argv: list[str] | None = None) -> int:
         command = args.session_command
         if command and command[0] == "--":
             command = command[1:]
-        tmux_target = None if args.no_auto_prompt else args.tmux_target or os.environ.get("TMUX_PANE")
+        tmux_target = None if args.no_auto_prompt else args.tmux_target
         agent = SessionAgent(
             repo=repo,
             config=config,

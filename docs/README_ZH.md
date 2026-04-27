@@ -123,7 +123,17 @@ coconut join --name bob \
 
 `join` 会把传入的 Git identity 写入该 worktree 的 per-worktree Git config，因此 Coconut snapshot commit 和 Codex candidate commit 都会使用正确作者。如果没有传入 identity，该 worktree 必须已经能读取到有效的 `user.name` 和 `user.email` Git config。
 
-当 `join` 在 tmux 中运行时，Coconut 会自动识别当前 pane，并在 sync task 到来时把 prompt 直接粘贴到这个 pane 里正在运行的 Codex。可以用 `--tmux-target` 显式指定 pane，或用 `--no-auto-prompt` 关闭自动 prompt 注入。不在 tmux 中运行时，Coconut 仍会打印 task 和 prompt 文件路径。
+Coconut 不会自动推断 tmux pane，因为 `TMUX_PANE` 可能从脚本、测试或嵌套 shell 中泄漏，导致 prompt 被粘贴到错误的 Codex。默认情况下，sync task 开始时 Coconut 会在终端打印 task 和 prompt 文件路径。如果希望 Coconut 把 sync prompt 直接粘贴进 Codex pane，需要显式 opt in：
+
+```bash
+coconut join --name alice \
+  --git-user-name "Alice Example" \
+  --git-user-email alice@example.com \
+  --tmux-target "$TMUX_PANE" \
+  -- codex
+```
+
+只有在当前 `join` 命令确实是在承载该开发者 Codex 的同一个 tmux pane 中运行时，才使用 `--tmux-target "$TMUX_PANE"`。
 
 生成的 `AGENTS.md` 会告诉 Codex 它处在 Coconut 管理的协作 session 中，并说明正常同步只需要在 managed worktree 中运行 `coconut sync`。
 
