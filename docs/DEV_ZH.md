@@ -204,26 +204,32 @@ git diff --check HEAD
 
 ## PyPI 发布
 
-Cocomerge 使用 `pyproject.toml` 作为唯一 packaging metadata 来源。不要再把版本号或包 metadata 写回 `setup.py`；发布树中没有 `setup.py`。
+Cocomerge 使用 `setup.cfg` 作为唯一 packaging metadata 来源。`pyproject.toml` 只声明 build backend，`setup.py` 只是调用 `setup()` 的兼容 shim；不要把版本号或包 metadata 写到 `pyproject.toml` 或 `setup.py` 中。
 
-发布由 `.github/workflows/release.yml` 处理。workflow 在推送 `v*.*.*` tag 时运行：构建 wheel 和 sdist，用 `twine` 检查，确认 tag 版本与 `project.version` 一致，然后通过 PyPI Trusted Publishing 发布到 PyPI。正常发布路径不需要在 GitHub Secrets 中保存 PyPI API token。
+发布由 `.github/workflows/release.yml` 处理。workflow 在推送 `v*.*.*` tag 时运行：构建 wheel 和 sdist，用 `twine` 检查，确认 tag 版本与 `metadata.version` 一致，然后通过 PyPI Trusted Publishing 发布到 PyPI。正常发布路径不需要在 GitHub Secrets 中保存 PyPI API token。
+
+第一次发布前的一次性设置：
+
+1. 在 GitHub 仓库的 `Settings -> Environments` 中创建 `pypi` environment。
+2. 在 `pypi` environment 的 deployment protection rules 中添加 `Required reviewers`。如果当前只有一个维护者，不要开启 `Prevent self-review`，否则 publish job 可能一直等待无人能 approve。
+3. 在 PyPI 中为项目 `cocomerge` 配置 project 或 pending publisher：owner 填 `ivowang`，repository 填 `cocomerge`，workflow 填 `release.yml`，environment 填 `pypi`。
 
 发布步骤：
 
 ```bash
-# 先修改 pyproject.toml 的 project.version
+# 先修改 setup.cfg 的 metadata.version
 python -m pip install --upgrade build twine
 rm -rf dist build *.egg-info src/*.egg-info
 python -m build
 python -m twine check --strict dist/*
-git add pyproject.toml
+git add setup.cfg
 git commit -m "Release 0.1.1"
 git tag v0.1.1
 git push origin main
 git push origin v0.1.1
 ```
 
-第一次发布前，需要在 PyPI 上为项目 `cocomerge` 配置项目或 pending publisher：repository 填 `ivowang/cocomerge`，workflow 填 `release.yml`，environment 填 `pypi`。
+tag push 后，打开 GitHub Actions 里的对应 workflow run。build job 不需要审批；publish job 会停在 `pypi` environment 等待 approval。通过 `Review deployments` approve 后，GitHub Actions 才会把已经构建好的 artifacts 发布到 PyPI。PyPI 文件是不可变的，一旦某个版本上传成功，之后不要复用这个版本号。
 
 发布前确认公开树只包含：
 
@@ -231,6 +237,8 @@ git push origin v0.1.1
 - `.github/workflows/release.yml`；
 - `MANIFEST.in`；
 - `pyproject.toml`；
+- `setup.cfg`；
+- `setup.py`；
 - `README.md`；
 - `docs/README_ZH.md`；
 - `docs/DEV.md`；

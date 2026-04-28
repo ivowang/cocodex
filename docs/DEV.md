@@ -275,34 +275,48 @@ git diff --check HEAD
 
 ## PyPI Release
 
-Cocomerge uses `pyproject.toml` as the single packaging metadata source. Do not
-add version or package metadata back to `setup.py`; there is no `setup.py` in
-the release tree.
+Cocomerge uses `setup.cfg` as the single packaging metadata source.
+`pyproject.toml` only declares the build backend, and `setup.py` is only a
+compatibility shim that calls `setup()`. Do not add version or package metadata
+to `pyproject.toml` or `setup.py`.
 
 Publishing is handled by `.github/workflows/release.yml`. The workflow runs when
 a `v*.*.*` tag is pushed. It builds the wheel and sdist, checks them with
-`twine`, verifies that the tag version matches `project.version`, and publishes
+`twine`, verifies that the tag version matches `metadata.version`, and publishes
 to PyPI through Trusted Publishing. No PyPI API token should be stored in GitHub
 Secrets for the normal release path.
+
+One-time setup before the first release:
+
+1. In GitHub, create the environment `pypi` under repository
+   `Settings -> Environments`.
+2. Add `Required reviewers` under the `pypi` environment's deployment
+   protection rules. If the repository has only one maintainer, do not enable
+   `Prevent self-review`; otherwise the publish job can be left waiting forever.
+3. In PyPI, configure a project or pending publisher for project `cocomerge`
+   with owner `ivowang`, repository `cocomerge`, workflow `release.yml`, and
+   environment `pypi`.
 
 Release steps:
 
 ```bash
-# edit pyproject.toml project.version first
+# edit setup.cfg metadata.version first
 python -m pip install --upgrade build twine
 rm -rf dist build *.egg-info src/*.egg-info
 python -m build
 python -m twine check --strict dist/*
-git add pyproject.toml
+git add setup.cfg
 git commit -m "Release 0.1.1"
 git tag v0.1.1
 git push origin main
 git push origin v0.1.1
 ```
 
-The first release requires a PyPI project or pending publisher for project
-`cocomerge`, repository `ivowang/cocomerge`, workflow `release.yml`, and
-environment `pypi`.
+After the tag push, open the GitHub Actions run. The build job should complete
+without approval; the publish job waits on the `pypi` environment. Approve the
+deployment from `Review deployments` to publish the already-built artifacts to
+PyPI. PyPI files are immutable, so never reuse a version after a successful
+upload.
 
 Before publishing, verify that the public tree contains only:
 
@@ -310,6 +324,8 @@ Before publishing, verify that the public tree contains only:
 - `.github/workflows/release.yml`;
 - `MANIFEST.in`;
 - `pyproject.toml`;
+- `setup.cfg`;
+- `setup.py`;
 - `README.md`;
 - `docs/README_ZH.md`;
 - `docs/DEV.md`;

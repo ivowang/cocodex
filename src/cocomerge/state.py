@@ -365,3 +365,30 @@ def list_events(db: sqlite3.Connection, limit: int = 100) -> list[dict[str, Any]
         }
         for row in rows
     ]
+
+
+def list_events_after(
+    db: sqlite3.Connection,
+    event_id: int,
+    *,
+    limit: int = 1000,
+) -> list[dict[str, Any]]:
+    rows = db.execute(
+        """
+        SELECT id, created_at, type, payload
+        FROM events
+        WHERE id > ?
+        ORDER BY id ASC
+        LIMIT ?
+        """,
+        (event_id, limit),
+    ).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "created_at": row["created_at"],
+            "type": row["type"],
+            "payload": json.loads(row["payload"]),
+        }
+        for row in rows
+    ]

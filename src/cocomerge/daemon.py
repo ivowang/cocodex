@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import sys
 import threading
 import time
 from pathlib import Path
@@ -29,6 +30,7 @@ from .state import (
     get_lock,
     get_session,
     initialize_schema,
+    list_events_after,
     list_sessions,
     list_queue,
     mark_session_disconnected,
@@ -52,6 +54,122 @@ EXTERNAL_MAIN_RECOVERY_STATES = {"dirty", "queued"} | INCOMPLETE_INTEGRATION_STA
 
 ControlSender = Callable[[SessionRecord, dict], dict]
 TaskIdFactory = Callable[[str], str]
+
+
+def _daemon_log(message: str, *, created_at: float | None = None, **fields: object) -> None:
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(created_at or time.time()))
+    details = " ".join(
+        f"{key}={_format_log_value(value)}"
+        for key, value in fields.items()
+        if value is not None
+    )
+    suffix = f" {details}" if details else ""
+    print(f"[{stamp} UTC] {message}{suffix}", file=sys.stderr, flush=True)
+
+
+def _format_log_value(value: object) -> str:
+    text = str(value)
+    if not text:
+        return "''"
+    if any(ch.isspace() for ch in text):
+        return repr(text)
+    return text
+
+
+def _latest_event_id(db: sqlite3.Connection) -> int:
+    row = db.execute("SELECT COALESCE(MAX(id), 0) AS latest FROM events").fetchone()
+    return int(row["latest"] if row is not None else 0)
+
+
+def _emit_new_events(db: sqlite3.Connection, last_event_id: int) -> int:
+    latest = last_event_id
+    for event in list_events_after(db, last_event_id):
+        latest = max(latest, int(event["id"]))
+        _emit_event(event)
+    return latest
+
+
+def _emit_event(event: dict) -> None:
+    event_type = event["type"]
+    payload = event["payload"]
+    created_at = event["created_at"]
+    if event_type == "session_registered":
+        _daemon_log(
+            "session registered",
+            created_at=created_at,
+            session=payload.get("session"),
+            state=payload.get("state"),
+        )
+    elif event_type == "session_runtime_updated":
+        state = "connected" if payload.get("connected") else "runtime updated"
+        _daemon_log(
+            f"session {state}",
+            created_at=created_at,
+            session=payload.get("session"),
+            pid=payload.get("pid"),
+            socket=payload.get("control_socket"),
+        )
+    elif event_type == "session_transition":
+        _daemon_log(
+            "session state changed",
+            created_at=created_at,
+            session=payload.get("session"),
+            state=payload.get("state"),
+            reason=payload.get("reason"),
+            task=payload.get("active_task"),
+        )
+    elif event_type == "session_queued":
+        _daemon_log("session queued", created_at=created_at, session=payload.get("session"))
+    elif event_type == "session_dequeued":
+        _daemon_log("session dequeued", created_at=created_at, session=payload.get("session"))
+    elif event_type == "lock_updated":
+        owner = payload.get("owner")
+        if owner:
+            _daemon_log(
+                "integration lock acquired",
+                created_at=created_at,
+                owner=owner,
+                task=payload.get("task_id"),
+            )
+        else:
+            _daemon_log("integration lock released", created_at=created_at)
+    elif event_type == "session_main_seen":
+        _daemon_log(
+            "session saw main",
+            created_at=created_at,
+            session=payload.get("session"),
+            commit=_short_commit(payload.get("commit")),
+        )
+    elif event_type == "session_disconnected":
+        _daemon_log(
+            "session disconnected",
+            created_at=created_at,
+            session=payload.get("session"),
+            reason=payload.get("reason"),
+        )
+    elif event_type == "external_main_updated":
+        _daemon_log(
+            "external main update detected",
+            created_at=created_at,
+            previous=_short_commit(payload.get("previous")),
+            current=_short_commit(payload.get("current")),
+        )
+    elif event_type == "remote_sync_failed":
+        _daemon_log(
+            "remote sync failed",
+            created_at=created_at,
+            session=payload.get("session"),
+            task=payload.get("task_id"),
+            error=payload.get("error"),
+        )
+    else:
+        _daemon_log(event_type, created_at=created_at, **payload)
+
+
+def _short_commit(value: object) -> object:
+    if not isinstance(value, str) or len(value) < 12:
+        return value
+    return value[:12]
 
 
 def detect_disconnected_sessions(
@@ -912,23 +1030,46 @@ def start_socket_server(
         try:
             initialize_schema(request_db)
             return handle_session_message(repo, request_db, config, message)
+        except Exception as exc:
+            message_type = message.get("type")
+            if message_type != "heartbeat":
+                _daemon_log(
+                    "request failed",
+                    type=message_type,
+                    session=message.get("session"),
+                    error=str(exc) or exc.__class__.__name__,
+                )
+            raise
         finally:
             request_db.close()
 
     _ = db
     thread = serve_forever(socket_path, handler, stop_event=stop_event)
     thread.start()
+    _daemon_log("socket listening", socket=socket_path)
     return stop_event
 
 
 def run_daemon(repo: Path, db: sqlite3.Connection, config: CocomergeConfig) -> int:
+    _daemon_log(
+        "daemon starting",
+        repo=repo,
+        main=config.main_branch,
+        remote=config.remote or "none",
+        interval_s=config.dirty_interval_s,
+    )
+    last_event_id = _latest_event_id(db)
     recover_incomplete_sessions(db)
+    last_event_id = _emit_new_events(db, last_event_id)
     stop_event = start_socket_server(repo, db, config)
+    _daemon_log("daemon ready", socket=repo / config.socket_path)
     try:
         while True:
             detect_disconnected_sessions(db)
             if not detect_external_main_update(repo, db, config):
                 process_queue_once(repo, db, config)
+            last_event_id = _emit_new_events(db, last_event_id)
             time.sleep(config.dirty_interval_s)
     finally:
+        _daemon_log("daemon stopping")
         stop_event.set()

@@ -156,6 +156,10 @@ Start one daemon in a long-running terminal from the project repository:
 cocomerge daemon
 ```
 
+The daemon prints an operational log in that terminal: session joins, sync
+requests, queue movement, integration lock changes, publish events, remote sync
+failures, and recovery transitions.
+
 Start each Codex session through Cocomerge from that developer's tmux window:
 
 ```bash

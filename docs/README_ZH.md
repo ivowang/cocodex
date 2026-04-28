@@ -133,6 +133,8 @@ cocomerge init --main main --remote origin
 cocomerge daemon
 ```
 
+daemon 会在这个终端中打印运行日志，包括 session join、sync 请求、queue 变化、integration lock 变化、publish 事件、remote sync 失败和 recovery 状态变化。
+
 每个 Codex session 都在对应开发者自己的 tmux 窗口中通过 Cocomerge 启动：
 
 ```bash

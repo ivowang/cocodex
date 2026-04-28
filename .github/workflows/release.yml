@@ -25,16 +25,17 @@ jobs:
       - name: Validate tag version
         run: |
           python - <<'PY'
+          import configparser
           import os
-          import tomllib
           from pathlib import Path
 
           tag = os.environ["GITHUB_REF_NAME"]
           expected = tag[1:] if tag.startswith("v") else tag
-          with Path("pyproject.toml").open("rb") as handle:
-              version = tomllib.load(handle)["project"]["version"]
+          config = configparser.ConfigParser()
+          config.read(Path("setup.cfg"), encoding="utf-8")
+          version = config["metadata"]["version"]
           if version != expected:
-              raise SystemExit(f"Tag {tag!r} does not match pyproject version {version!r}")
+              raise SystemExit(f"Tag {tag!r} does not match package version {version!r}")
           PY
 
       - name: Build package
