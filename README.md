@@ -183,17 +183,20 @@ Each joined session gets:
 it into that worktree's per-worktree Git config, so Cocodex snapshot commits
 and Codex candidate commits have the right author.
 
-Cocodex does not automatically infer a tmux pane, because `TMUX_PANE` can leak
-through scripts, tests, or nested shells and target the wrong Codex. By default,
-Cocodex prints the task and prompt file paths when a sync task starts. To paste
-sync prompts directly into the Codex pane, opt in explicitly:
+Cocodex assumes `join` is run from the developer's own tmux pane. When
+`TMUX_PANE` is present, `join` automatically binds the session agent to that
+pane, so sync tasks and restart notices are pasted into the running Codex as
+ordinary user prompts.
+
+For advanced setups, override the target explicitly:
 
 ```bash
 cocodex join --tmux-target "$TMUX_PANE" alice
 ```
 
-Only pass `--tmux-target "$TMUX_PANE"` when running `join` from the same tmux
-pane that will host that developer's Codex.
+If `join` is not running inside tmux, Cocodex prints the task and prompt file
+paths instead. The developer then needs to open the task file from the session
+worktree and follow it manually.
 
 The generated `AGENTS.md` tells Codex that it is in a Cocodex-managed
 collaboration session and that normal synchronization uses only
@@ -219,8 +222,8 @@ development continues:
   unrelated work.
 
 If a restart notice appears, handle that notice before accepting new feature
-work. With an explicit `--tmux-target`, Cocodex also pastes the restart notice
-into the Codex pane.
+work. In the normal tmux workflow, Cocodex pastes the notice into the Codex
+pane automatically.
 
 ## What `sync` Does
 
@@ -235,21 +238,32 @@ cocodex sync
 If Alice is already current, Cocodex reports that the session is already
 synced.
 
-### Dirty Session
+### Dirty Session Based On Current Main
 
-If Alice has local edits or commits, this requests integration:
+If Alice has local edits or commits and `main` has not advanced since Alice
+last synced, Cocodex publishes Alice's current worktree directly:
 
 ```bash
 cocodex sync
 ```
 
-When Alice reaches the front of the queue, Cocodex:
+If the worktree has uncommitted changes, Cocodex creates a snapshot commit with
+Alice's configured Git identity, fast-forwards local `main` to that commit, and
+best-effort syncs the remote. This path does not create a Codex fusion task,
+because there is no newer main work to merge with.
+
+### Dirty Session After Main Advanced
+
+If Alice has local edits or commits and `main` has advanced since Alice last
+synced, `cocodex sync` requests integration. When Alice reaches the front of
+the queue, Cocodex:
 
 1. freezes Alice's session;
 2. snapshots Alice's current work;
 3. resets Alice's worktree to the latest `main`;
 4. writes a task file under `.cocodex/tasks/`;
-5. prints the task file path inside Alice's Codex terminal.
+5. pastes the sync prompt into Alice's Codex terminal when tmux is available,
+   and always prints the task file path.
 
 Alice's Codex reads the task file and re-implements or semantically merges
 Alice's feature on top of the latest `main`. If the task arrives while Codex is
@@ -287,8 +301,9 @@ Alice runs:
 !cocodex sync
 ```
 
-Cocodex gives Alice's Codex a task. Alice's Codex applies feature A on latest
-`main`, commits, and runs:
+If no one else has advanced `main` since Alice last synced, Cocodex publishes
+Alice directly. If `main` has advanced, Cocodex gives Alice's Codex a task;
+Alice's Codex applies feature A on latest `main`, commits, and runs:
 
 ```bash
 !cocodex sync
@@ -302,8 +317,9 @@ Bob later runs:
 !cocodex sync
 ```
 
-Bob's task is based on the current `main`, which already includes feature A.
-Bob's Codex applies feature B on top of that, commits, and runs:
+Because Alice has now advanced `main`, Bob receives a task based on the current
+`main`, which already includes feature A. Bob's Codex applies feature B on top
+of that, commits, and runs:
 
 ```bash
 !cocodex sync
@@ -355,8 +371,9 @@ command is being run from a repository with a different Cocodex config.
 `cocodex join <name>`, then run `!cocodex sync` from that Codex session.
 
 If Cocodex prints task and prompt file paths instead of pasting into Codex,
-that is expected unless the session was started with an explicit
-`--tmux-target`. Read the task file in the session worktree and follow it.
+`join` probably was not started from a tmux pane, or tmux prompt injection
+failed. Read the task file in the session worktree and follow it manually, or
+restart the session from the developer's tmux pane with `cocodex join <name>`.
 
 Remote sync warnings are non-fatal. Fix the network or Git authentication
 problem when convenient; Cocodex retries remote synchronization on later

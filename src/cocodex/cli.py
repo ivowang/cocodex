@@ -30,7 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
     join_parser.add_argument("session", nargs="?", metavar="user_name")
     join_parser.add_argument(
         "--tmux-target",
-        help="tmux pane that should receive Cocodex prompts; prompt injection is opt-in",
+        help="override the tmux pane that should receive Cocodex prompts",
     )
 
     subparsers.add_parser("status")
@@ -137,7 +137,7 @@ def _main(argv: list[str] | None = None) -> int:
             config=config,
             record=record,
             command=command,
-            tmux_target=args.tmux_target,
+            tmux_target=_resolve_tmux_target(args.tmux_target),
             startup_prompt=startup_prompt,
         )
         control_thread = agent.start_control_server(wait=True)
@@ -287,6 +287,14 @@ def _main(argv: list[str] | None = None) -> int:
         print(f"Abandoned {args.session}")
         return 0
     return 0
+
+
+def _resolve_tmux_target(explicit_target: str | None) -> str | None:
+    if explicit_target is not None:
+        return explicit_target or None
+    import os
+
+    return os.environ.get("TMUX_PANE") or None
 
 
 def _format_sync_completion_response(response: dict, session) -> str:

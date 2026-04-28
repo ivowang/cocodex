@@ -20,13 +20,13 @@ The daemon and session agents communicate over Unix domain sockets with JSONL
 messages. Git operations are delegated to the Git CLI through helpers in
 `src/cocodex/git.py`.
 
-`SessionAgent` can paste sync prompts into tmux, but only when `join` receives
-an explicit `--tmux-target`. Cocodex deliberately does not auto-detect
-`TMUX_PANE`: tests, wrapper scripts, and nested shells can inherit that
-environment variable from the wrong Codex. On `start_fusion`, the agent always
-writes a prompt file next to the task file and prints both paths; if a target
-was configured, it also uses `tmux load-buffer`, `paste-buffer`, and
-`send-keys Enter`.
+`SessionAgent` can paste sync prompts into tmux. `join` defaults the target to
+the current `TMUX_PANE` when that environment variable is present, which
+matches the product constraint that developers start Codex through Cocodex from
+their own tmux pane. `--tmux-target` can override the detected target for
+advanced launchers. On `start_fusion`, the agent always writes a prompt file
+next to the task file and prints both paths; if a target is available, it also
+uses `tmux load-buffer`, `paste-buffer`, and `send-keys Enter`.
 
 ## Configuration
 
@@ -67,7 +67,12 @@ another user's worktree.
 
 Internally, `sync` maps to different protocol actions:
 
-- no active task: request queueing with `ready_to_integrate`;
+- no active task and no local changes: catch up a clean session to latest
+  `main` when possible;
+- no active task, local changes, and `main == last_seen_main`: publish the
+  current session branch directly under the integration lock;
+- no active task, local changes, and `main != last_seen_main`: request queueing
+  with `ready_to_integrate`;
 - active task in `fusing` or retryable `blocked`: report `fusion_done` and let
   the daemon validate/publish the current session `HEAD`;
 - retryable remote publish recovery: report `fusion_done` again to retry the
@@ -86,6 +91,13 @@ workflow.
 The daemon does not automatically queue dirty sessions. Dirty work stays local
 until the owning session explicitly runs `sync`.
 
+Direct publish is deliberately limited to sessions whose recorded
+`last_seen_main` still equals current local `main`. If the worktree has
+uncommitted changes, Cocodex creates a snapshot commit with the session's
+configured Git identity, then fast-forwards local `main`. If another session
+publishes first, this condition becomes false and the later session goes
+through the normal semantic fusion path.
+
 `join <name>` resolves the developer from `config.developers[name]`. Cocodex
 uses that entry's `git_user_name` and `git_user_email`, enables Git
 `extensions.worktreeConfig`, and writes `user.name`/`user.email` with
@@ -94,6 +106,12 @@ distinct identity under the shared server account. If the entry has no
 `command`, Cocodex starts `codex`; otherwise it uses the configured JSON string
 array. The CLI no longer accepts Git identity overrides; configuration is the
 single source of truth for per-developer identity and launch command.
+
+When `join` runs inside tmux, `_resolve_tmux_target()` binds the session agent
+to the current pane by default. This is intentionally automatic: otherwise the
+daemon can create a sync task but the running Codex only sees a printed file
+path instead of receiving the full prompt. Launch wrappers that need a
+different pane should pass `--tmux-target` explicitly.
 
 On every `join`, Cocodex calls `prepare_join_startup_notice()` before launching
 the session command. This makes restart behavior explicit:
@@ -105,8 +123,9 @@ the session command. This makes restart behavior explicit:
 - clean sessions that are only behind `main` are fast-forwarded;
 - local unintegrated work produces a review-before-new-work notice.
 
-`SessionAgent` prints this startup notice after the child command starts. If an
-explicit tmux target was configured, it also pastes the notice into that pane.
+`SessionAgent` prints this startup notice after the child command starts. If a
+tmux target was detected or configured, it also pastes the notice into that
+pane.
 
 ## Generated Session Instructions
 

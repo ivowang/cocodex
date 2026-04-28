@@ -16,6 +16,7 @@ from .git import (
     fast_forward_ref,
     has_unsafe_git_state,
     is_dirty,
+    merge_base_is_ancestor,
     reset_hard,
     try_force_push_server_refs,
     update_ref,
@@ -332,6 +333,113 @@ def _sync_clean_session_to_main(
     return "no changes to sync"
 
 
+def publish_without_fusion_if_current(
+    repo: Path,
+    db: sqlite3.Connection,
+    config: CocodexConfig,
+    session: SessionRecord,
+    *,
+    send_control: ControlSender | None = None,
+    task_id_factory: TaskIdFactory = create_task_id,
+) -> str | None:
+    if session.last_seen_main is None or get_lock(db) is not None:
+        return None
+
+    latest_main = current_head(repo, config.main_branch)
+    if latest_main != session.last_seen_main:
+        return None
+
+    worktree = Path(session.worktree)
+    unsafe = has_unsafe_git_state(worktree)
+    if unsafe:
+        transition_session(
+            db,
+            session.name,
+            "blocked",
+            reason=f"unsafe Git state: {unsafe}",
+            active_task=None,
+            blocked_reason=unsafe,
+        )
+        raise RuntimeError(f"unsafe Git state: {unsafe}")
+
+    head = current_head(worktree)
+    if not merge_base_is_ancestor(worktree, latest_main, head):
+        return None
+
+    task_id = task_id_factory(session.name)
+    set_lock(db, owner=session.name, task_id=task_id)
+    try:
+        latest_main = current_head(repo, config.main_branch)
+        if latest_main != session.last_seen_main:
+            transition_session(
+                db,
+                session.name,
+                "queued",
+                reason="main advanced before direct publish",
+                active_task=None,
+            )
+            return None
+
+        transition_session(
+            db,
+            session.name,
+            "publishing",
+            reason="direct publish without fusion",
+            active_task=task_id,
+        )
+        if is_dirty(worktree):
+            add_all(worktree)
+            candidate = commit(worktree, f"cocodex direct publish: {session.name}")
+        else:
+            candidate = head
+
+        if candidate == latest_main:
+            transition_session(
+                db,
+                session.name,
+                "clean",
+                reason="sync requested with no changes",
+                active_task=None,
+            )
+            update_last_seen_main(db, session.name, latest_main)
+            return "already synced"
+
+        current_main = current_head(repo, config.main_branch)
+        if current_main != latest_main or not merge_base_is_ancestor(repo, current_main, candidate):
+            transition_session(
+                db,
+                session.name,
+                "queued",
+                reason="main advanced before direct publish",
+                active_task=None,
+            )
+            return None
+
+        fast_forward_ref(repo, config.main_branch, candidate)
+        set_metadata(db, "last_observed_main", candidate)
+        transition_session(
+            db,
+            session.name,
+            "clean",
+            reason="published without fusion",
+            active_task=None,
+        )
+        update_last_seen_main(db, session.name, candidate)
+    finally:
+        _release_lock_if_owned(db, session.name, task_id)
+
+    fast_forward_clean_sessions(repo, db, config, candidate)
+    broadcast_main_updated(db, candidate, send_control=send_control or send_control_message)
+    remote_error = try_force_push_server_refs(repo, config.remote)
+    if remote_error is not None:
+        record_event(
+            db,
+            "remote_sync_failed",
+            {"session": session.name, "task_id": task_id, "error": remote_error},
+        )
+    return f"published directly to {candidate}"
+
+
 def prepare_integration(
     repo: Path,
     db: sqlite3.Connection,
@@ -502,6 +610,19 @@ def process_queue_once(
             continue
         if session.active_task is not None:
             continue
+
+        direct_message = publish_without_fusion_if_current(
+            repo,
+            db,
+            config,
+            session,
+            send_control=send_control,
+            task_id_factory=task_id_factory,
+        )
+        if direct_message is not None:
+            dequeue_session(db, session.name)
+            _mark_waiting_sessions_queued(db, exclude=session.name)
+            return True
 
         task_id = task_id_factory(session.name)
         claim_integration_task(db, session.name, task_id, reason="freeze requested")
@@ -976,6 +1097,14 @@ def handle_session_message(
                 "type": "ack",
                 "session": session_name,
                 "message": sync_message,
+            }
+        direct_message = publish_without_fusion_if_current(repo, db, config, session)
+        if direct_message is not None:
+            dequeue_session(db, session_name)
+            return {
+                "type": "ack",
+                "session": session_name,
+                "message": direct_message,
             }
         transition_session(db, session_name, "queued", reason="sync requested", active_task=None)
         enqueue_session(db, session_name)
