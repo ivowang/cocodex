@@ -294,7 +294,13 @@ def _resolve_tmux_target(explicit_target: str | None) -> str | None:
         return explicit_target or None
     import os
 
+    if _truthy_env(os.environ.get("COCODEX_NO_TMUX")):
+        return None
     return os.environ.get("TMUX_PANE") or None
+
+
+def _truthy_env(value: str | None) -> bool:
+    return value is not None and value.lower() not in {"", "0", "false", "no", "off"}
 
 
 def _format_sync_completion_response(response: dict, session) -> str:

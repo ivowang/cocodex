@@ -175,7 +175,11 @@ def _session_agents_content(*, session: str, branch: str, config: CocodexConfig)
             "Cocodex coordinates this repository's multi-Codex collaboration.",
             "Do not run `git pull`, `git merge`, or `git push` against the main branch directly.",
             "Do not publish `main` yourself. Cocodex is the only writer to local `main`.",
-            "If a remote is configured, `cocodex sync` best-effort force-syncs server branch refs to that remote.",
+            "`cocodex sync` affects only this managed worktree and local `main`.",
+            "It never moves another developer's worktree. Other sessions catch up or publish",
+            "only when they run `cocodex sync` from their own managed worktrees.",
+            "If a remote is configured, `cocodex sync` best-effort force-syncs local",
+            "`main` and this session branch only.",
             "There is no fixed project-wide test command. For each sync task, design",
             "and run sufficient validation for the semantic merge, then write the",
             "validation report requested by the task file before running sync again.",
@@ -186,10 +190,12 @@ def _session_agents_content(*, session: str, branch: str, config: CocodexConfig)
             "",
             "    cocodex sync",
             "",
-            "When you have local work, sync requests an integration task. Wait for Cocodex",
-            "to print a task file path in this Codex terminal. Read that task file, treat",
-            "the current worktree as latest `main`, and re-implement or semantically merge",
-            "the snapshot described by the task on top of latest `main`.",
+            "If this worktree has no local work, sync may fast-forward it to latest `main`.",
+            "If local work is already based on latest `main`, sync may publish it directly",
+            "without a Codex task. If `main` has advanced, sync queues a semantic merge task.",
+            "Only when Cocodex prints or pastes a task file path should you read that task",
+            "file, treat the current worktree as latest `main`, and re-implement or",
+            "semantically merge the snapshot described by the task on top of latest `main`.",
             "If the task interrupts another request, pause at a safe point, preserve",
             "the remaining intent, finish the sync task, then resume the paused work.",
             "",
@@ -386,6 +392,9 @@ def _local_work_notice(session: SessionRecord) -> str:
         feature is ready to integrate, run:
 
             cocodex sync
+
+        Depending on whether `main` advanced, Cocodex may publish directly or
+        queue a semantic merge task for this session.
         """
     ).lstrip()
 

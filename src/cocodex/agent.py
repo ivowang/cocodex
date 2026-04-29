@@ -154,6 +154,8 @@ def build_sync_prompt(session: str, task_file: Path) -> str:
     return "\n".join(
         [
             "Cocodex sync task is ready.",
+            "This task exists because this session has local work and `main` advanced",
+            "before that work could be published directly.",
             "",
             f"Session: {session}",
             f"Task file: {task_file}",
@@ -174,7 +176,9 @@ def build_sync_prompt(session: str, task_file: Path) -> str:
             "3. ensure the worktree is clean;",
             "4. write the validation report requested by the task file;",
             "5. run `cocodex sync` again from this worktree so Cocodex can publish it",
-            "and best-effort sync remote refs.",
+            "to local `main` and best-effort sync local `main` plus this session branch.",
+            "",
+            "This publish does not move or notify other Cocodex session worktrees.",
             "",
             "If you cannot complete the task safely, stop and explain the blocker in this",
             "session output. Do not run sync again until a candidate is actually ready.",

@@ -117,7 +117,10 @@ When `join` runs inside tmux, `_resolve_tmux_target()` binds the session agent
 to the current pane by default. This is intentionally automatic: otherwise the
 daemon can create a sync task but the running Codex only sees a printed file
 path instead of receiving the full prompt. Launch wrappers that need a
-different pane should pass `--tmux-target` explicitly.
+different pane should pass `--tmux-target` explicitly. Non-interactive
+maintenance and test harnesses should set `COCODEX_NO_TMUX=1` so inherited
+`TMUX_PANE` values do not paste test prompts into the operator's current Codex
+session.
 
 On every `join`, Cocodex calls `prepare_join_startup_notice()` before launching
 the session command. This makes restart behavior explicit:
@@ -285,14 +288,18 @@ Manual recovery commands are intentionally operator-only.
 
 ## Development Notes
 
-The public release tree intentionally excludes the internal implementation test
-suite and planning artifacts. Maintainers should validate changes in a
-development checkout before producing a clean public release tree.
+The public release tree includes the Cocodex release scenario tests under
+`tests/`. They are intentionally part of the source distribution so users and
+maintainers can reproduce the same end-to-end checks that guard PyPI releases.
+Runtime scratch repositories are created under `COCODEX_TEST_ROOT`, or under
+`~/coconut-tests` when that environment variable is not set. In this development
+environment, that default is `/root/coconut-tests`.
 
-Useful local checks when the validation suite is present:
+Useful local checks:
 
 ```bash
-pytest -q
+python tests/run_release_scenarios.py
+python -m pytest -q
 PYTHONPATH=src python3 -m cocodex --help
 git diff --check HEAD
 ```
@@ -327,6 +334,7 @@ Release steps:
 # edit setup.cfg metadata.version first
 python -m pip install --upgrade build twine
 rm -rf dist build *.egg-info src/*.egg-info
+python tests/run_release_scenarios.py
 python -m build
 python -m twine check --strict dist/*
 git add setup.cfg
@@ -354,7 +362,8 @@ Before publishing, verify that the public tree contains only:
 - `docs/README_ZH.md`;
 - `docs/DEV.md`;
 - `docs/DEV_ZH.md`;
+- `tests/`;
 - supporting project metadata such as `.gitignore`.
 
 Do not publish `.cocodex/`, `.pytest_cache/`, `__pycache__/`, internal planning
-documents, or the implementation test suite unless the release policy changes.
+documents, or ad hoc scratch directories.
