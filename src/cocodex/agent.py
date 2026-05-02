@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import os
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -12,7 +15,10 @@ from .transport import send_message, serve_forever
 
 
 def control_socket_path(repo: Path, config: CocodexConfig, session: str) -> Path:
-    return repo / ".cocodex" / "sessions" / f"{session}.sock"
+    repo_key = hashlib.sha256(str(repo.resolve()).encode("utf-8")).hexdigest()[:16]
+    safe_session = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in session)[:24]
+    runtime_dir = Path(tempfile.gettempdir()) / f"cocodex-{os.getuid()}"
+    return runtime_dir / f"{repo_key}-{safe_session}.sock"
 
 
 class SessionAgent:

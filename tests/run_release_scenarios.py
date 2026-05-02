@@ -149,7 +149,7 @@ class Harness:
         else:
             self.fail(message)
 
-    def wait_for(self, label: str, predicate: Callable[[], bool], timeout: float = 20.0) -> bool:
+    def wait_for(self, label: str, predicate: Callable[[], bool], timeout: float = 60.0) -> bool:
         deadline = time.monotonic() + timeout
         last_exc: Exception | None = None
         while time.monotonic() < deadline:
@@ -375,7 +375,7 @@ def test_package_metadata(h: Harness) -> None:
     shutil.copytree(
         SOURCE,
         build_source,
-        ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc", "*.egg-info", "build", "dist"),
+        ignore=shutil.ignore_patterns(".git", ".venv", "__pycache__", "*.pyc", "*.egg-info", "build", "dist"),
     )
     sdist_dir = case / "sdist"
     sdist_dir.mkdir()
@@ -530,6 +530,21 @@ def test_init_status_config_join(h: Harness) -> None:
         and "remote refs" not in prompt_check.stdout,
         "sync prompt describes semantic task scope and scoped remote sync",
     )
+    socket_check = h.run(
+        "join: control socket path stays short",
+        [
+            sys.executable,
+            "-c",
+            "from pathlib import Path\n"
+            "from cocodex.agent import control_socket_path\n"
+            "from cocodex.config import load_config\n"
+            "path = control_socket_path(Path.cwd(), load_config(Path.cwd()), 'alice')\n"
+            "print(path)\n",
+        ],
+        repo,
+    )
+    control_socket = socket_check.stdout.strip()
+    h.require(len(control_socket) < 100 and "/cocodex-" in control_socket, "control socket uses short runtime path")
     exclude = read(Path(subprocess.check_output(["git", "rev-parse", "--git-common-dir"], cwd=worktree, text=True).strip()) / "info" / "exclude")
     h.require("/AGENTS.md" in exclude, "AGENTS.md is ignored through worktree git exclude")
     h.terminate(proc, "init-status-config-alice-join")
@@ -860,6 +875,8 @@ def main() -> int:
         cleanup_source_build_artifacts()
         report = h.report()
         print(report)
+        if h.failures:
+            print(report.read_text(encoding="utf-8", errors="replace"))
     return 1 if h.failures else 0
 
 

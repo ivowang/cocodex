@@ -20,6 +20,13 @@ The daemon and session agents communicate over Unix domain sockets with JSONL
 messages. Git operations are delegated to the Git CLI through helpers in
 `src/cocodex/git.py`.
 
+The daemon socket is addressed through the configured `socket_path`. If that
+path is too long for Linux `AF_UNIX`, transport writes a small pointer file at
+the configured path and binds the real socket under the system temporary
+directory. Per-session control sockets always use short runtime paths keyed by
+repository hash and session name. This avoids path length failures when a
+project lives under a deep worktree or CI temporary directory.
+
 `SessionAgent` can paste sync prompts into tmux. `join` defaults the target to
 the current `TMUX_PANE` when that environment variable is present, which
 matches the product constraint that developers start Codex through Cocodex from

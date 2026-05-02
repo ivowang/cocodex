@@ -14,6 +14,9 @@ Cocodex 是围绕 Git 和 Codex 构建的单机协作编排层，主要由以下
 
 daemon 和 session agent 通过 Unix domain socket 传输 JSONL 消息。Git 操作通过 `src/cocodex/git.py` 中的 helper 调用 Git CLI 完成。
 
+daemon socket 通过配置的 `socket_path` 寻址。如果这个路径超过 Linux
+`AF_UNIX` 限制，transport 会在配置路径写一个小的 pointer file，并把真正的 socket bind 到系统临时目录下。每个 session 的 control socket 也使用系统临时目录下的短路径，并用 repository hash 和 session name 区分。这样可以避免项目路径很深或位于 CI 临时目录时触发 path length 限制。
+
 `SessionAgent` 可以把 sync prompt 粘贴到 tmux 中。`join` 会在环境里存在 `TMUX_PANE` 时默认使用当前 pane，这符合“开发者从自己的 tmux pane 中通过 Cocodex 启动 Codex”的产品约束。高级启动器可以用 `--tmux-target` 覆盖检测到的目标。收到 `start_fusion` 后，agent 总会在 task file 旁边写出 prompt file 并打印二者路径；如果有可用目标 pane，也会额外通过 `tmux load-buffer`、`paste-buffer` 和 `send-keys Enter` 注入 prompt。
 
 ## 配置模型
