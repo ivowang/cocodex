@@ -106,10 +106,20 @@ class SessionAgent:
                 try:
                     send_prompt_to_tmux(self.tmux_target, prompt, session=self.record.name)
                     response["prompt_injected"] = True
+                    response["prompt_delivery"] = "tmux"
                 except RuntimeError as exc:
                     print(f"Cocodex prompt injection failed: {exc}", flush=True)
                     response["prompt_injected"] = False
                     response["prompt_error"] = str(exc)
+            elif truthy_env(os.environ.get("COCODEX_HEADLESS_PROMPT_OK")):
+                response["prompt_injected"] = True
+                response["prompt_delivery"] = "prompt_file"
+            else:
+                response["prompt_injected"] = False
+                response["prompt_error"] = (
+                    "no tmux target is available; restart this session with "
+                    "`cocodex join <name>` from its tmux pane"
+                )
             return response
         if message_type == "shutdown":
             self.stop_event.set()
@@ -190,7 +200,8 @@ def build_sync_prompt(session: str, task_file: Path) -> str:
             "3. ensure the worktree is clean;",
             "4. write the validation report requested by the task file;",
             "5. run `cocodex sync` again from this worktree so Cocodex can publish it",
-            "to local `main` and best-effort sync local `main` plus this session branch.",
+            "to local `main` and best-effort sync local `main`, this session branch,",
+            "and Cocodex recovery refs.",
             "",
             "This publish does not move or notify other Cocodex session worktrees.",
             "",
@@ -238,6 +249,10 @@ def send_prompt_to_tmux(target: str, prompt: str, *, session: str) -> None:
     )
     if enter.returncode != 0:
         raise RuntimeError(enter.stderr.strip() or "tmux send-keys failed")
+
+
+def truthy_env(value: str | None) -> bool:
+    return value is not None and value.lower() not in {"", "0", "false", "no", "off"}
 
 
 def run_agent(

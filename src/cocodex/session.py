@@ -24,11 +24,6 @@ from .transport import send_message
 SESSION_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 COCODEX_AGENTS_MARKER = "<!-- cocodex-managed-session-agents -->"
 COCODEX_AGENTS_FILE = "AGENTS.md"
-REJOIN_RECOVERABLE_PREFIXES = (
-    "heartbeat timeout",
-    "startup recovery from fusing",
-    "startup recovery from verifying",
-)
 
 
 def ensure_session_worktree(
@@ -233,7 +228,15 @@ def prepare_join_startup_notice(
         return refreshed, _active_task_notice(repo, refreshed)
 
     if refreshed.state == "queued":
-        return refreshed, _queued_notice(refreshed)
+        transition_session(
+            db,
+            refreshed.name,
+            "clean",
+            reason="join normalized legacy queued sync request",
+            active_task=None,
+            blocked_reason=None,
+        )
+        refreshed = get_session(db, refreshed.name) or refreshed
 
     clean_behind_notice = _clean_behind_main_notice(repo, config, refreshed)
     if clean_behind_notice is not None:
@@ -250,15 +253,14 @@ def _recover_rejoinable_task(
     db: sqlite3.Connection,
     session: SessionRecord,
 ) -> SessionRecord:
-    if session.state != "recovery_required" or session.active_task is None:
+    if session.active_task is None:
         return session
     lock = get_lock(db)
     task_path = task_file_path(repo, session.active_task)
-    reason = session.blocked_reason or ""
     if (
         lock == {"owner": session.name, "task_id": session.active_task}
         and task_path.exists()
-        and reason.startswith(REJOIN_RECOVERABLE_PREFIXES)
+        and session.state in {"blocked", "recovery_required", "frozen", "snapshot", "verifying", "publishing"}
     ):
         transition_session(
             db,
@@ -289,13 +291,14 @@ def _active_task_notice(repo: Path, session: SessionRecord) -> str:
             Task file: {task_path}
             Reason: {reason}
 
-            Do not begin new feature work yet. Run `cocodex status` and
-            `cocodex log`; an operator should inspect or abandon this task.
+            Do not begin new feature work yet. Run `cocodex sync` from this
+            worktree. If sync still refuses, read the refusal output and use
+            `cocodex status` plus `cocodex log` for details.
             """
         ).lstrip()
     if session.state == "recovery_required":
         body = [
-            "Cocodex restart notice: this session has an active sync task in recovery.",
+            "Cocodex restart notice: this session has an unfinished sync task.",
             "",
             f"Session: {session.name}",
             f"State: {session.state}",
@@ -303,9 +306,8 @@ def _active_task_notice(repo: Path, session: SessionRecord) -> str:
             f"Validation file: {validation_path}",
             f"Reason: {reason}",
             "",
-            "Do not begin new feature work yet. This state may need operator inspection.",
-            "Run `cocodex status` and `cocodex log`, then either recover this task",
-            "or have an operator abandon it.",
+            "Do not begin new feature work yet. Read the task file, finish the task,",
+            "write validation, and run `cocodex sync` again from this worktree.",
             "",
         ]
         return "\n".join(body)
@@ -332,21 +334,6 @@ def _active_task_notice(repo: Path, session: SessionRecord) -> str:
         ]
     )
     return "\n".join(body)
-
-
-def _queued_notice(session: SessionRecord) -> str:
-    return textwrap.dedent(
-        f"""
-        Cocodex restart notice: this session already has a sync request queued.
-
-        Session: {session.name}
-        State: queued
-
-        Do not start unrelated feature work yet. Keep this Codex session running
-        and wait for Cocodex to deliver the sync task. If nothing happens, run
-        `cocodex status` to check whether the daemon and integration lock are healthy.
-        """
-    ).lstrip()
 
 
 def _clean_behind_main_notice(
@@ -463,6 +450,8 @@ def infer_session_from_cwd(db: sqlite3.Connection, cwd: Path | None = None) -> S
 def send_completion(
     socket_path: Path,
     session: SessionRecord,
+    *,
+    timeout: float = 120.0,
 ) -> dict:
     if session.active_task is None:
         raise RuntimeError(f"Session {session.name} has no active task")
@@ -471,5 +460,5 @@ def send_completion(
         "session": session.name,
         "task_id": session.active_task,
     }
-    raw = send_message(socket_path, message, timeout=5)
+    raw = send_message(socket_path, message, timeout=timeout)
     return decode_message(raw)

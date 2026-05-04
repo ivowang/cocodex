@@ -11,7 +11,6 @@ class ProtocolError(ValueError):
 TASK_MESSAGE_TYPES = {
     "freeze",
     "start_fusion",
-    "blocked",
     "freeze_ack",
     "freeze_busy",
     "fusion_done",
@@ -22,7 +21,6 @@ KNOWN_TYPES = TASK_MESSAGE_TYPES | {
     "register",
     "registered",
     "heartbeat",
-    "queued",
     "ready_to_integrate",
     "shutdown",
     "error",

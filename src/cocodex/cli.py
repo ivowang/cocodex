@@ -2,18 +2,16 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import datetime, timezone
-from pathlib import Path
 
 
-RECOVERY_COMMANDS = {"resume", "abandon"}
+SYNC_DAEMON_TIMEOUT = 120.0
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cocodex")
     subparsers = parser.add_subparsers(
         dest="command",
-        metavar="{init,daemon,join,sync,status,log,task}",
+        metavar="{init,daemon,join,sync,status,log}",
         required=True,
     )
 
@@ -41,30 +39,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("sync")
 
-    task_parser = subparsers.add_parser("task")
-    task_parser.add_argument("session")
-
-    return parser
-
-
-def build_recovery_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="cocodex")
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    resume_parser = subparsers.add_parser("resume")
-    resume_parser.add_argument("session")
-
-    abandon_parser = subparsers.add_parser("abandon")
-    abandon_parser.add_argument("session")
-
     return parser
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    raw = sys.argv[1:] if argv is None else list(argv)
-    if raw and raw[0] in RECOVERY_COMMANDS:
-        return build_recovery_parser().parse_args(raw)
-    return build_parser().parse_args(raw)
+    return build_parser().parse_args(sys.argv[1:] if argv is None else argv)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -187,18 +166,6 @@ def _main(argv: list[str] | None = None) -> int:
         initialize_schema(db)
         print(format_events(db), end="")
         return 0
-    if args.command == "task":
-        from .config import find_cocodex_root, load_config, validate_config
-        from .state import connect, initialize_schema
-        from .status import format_task_status
-
-        repo = find_cocodex_root()
-        config = load_config(repo)
-        validate_config(repo, config)
-        db = connect(repo)
-        initialize_schema(db)
-        print(format_task_status(repo, db, config, args.session), end="")
-        return 0
     if args.command == "sync":
         from .config import find_cocodex_root, load_config, validate_config
         from .protocol import decode_message
@@ -212,48 +179,37 @@ def _main(argv: list[str] | None = None) -> int:
         db = connect(repo)
         initialize_schema(db)
         session = infer_session_from_cwd(db)
-        remote_errors = [_sync_remote_best_effort(repo, config, session)]
-        if session.state == "blocked" and session.active_task is None:
-            from .failures import format_failure_handling
-
-            reason = f": {session.blocked_reason}" if session.blocked_reason else ""
-            print(
-                f"{session.name}: blocked{reason}\n"
-                f"Fix the blocker, then run `cocodex resume {session.name}` from the project repository."
-                + format_failure_handling(
-                    reason=session.blocked_reason or "blocked",
-                    session=session.name,
-                    state=session.state,
-                    active_task=session.active_task,
-                )
-            )
-            _print_remote_sync_errors(remote_errors)
-            return 1
+        remote_errors: list[str | None] = []
         if session.active_task is not None:
-            if session.state in {"fusing", "blocked", "recovery_required"}:
-                response = send_completion(repo / config.socket_path, session)
-                remote_errors.append(_sync_remote_best_effort(repo, config, session))
-                print(_format_sync_completion_response(response, session))
+            socket_path = repo / config.socket_path
+            if not socket_path.exists():
+                raise RuntimeError("cocodex daemon is not running")
+            response = send_completion(
+                socket_path,
+                session,
+                timeout=SYNC_DAEMON_TIMEOUT,
+            )
+            if response.get("type") == "error":
+                _print_sync_refusal(response["message"], repo=repo, session=session)
                 _print_remote_sync_errors(remote_errors)
-                return 0 if response.get("type") == "ack" else 1
-            print(f"{session.name}: sync already in progress ({session.state})")
+                return 1
+            remote_errors.append(_sync_remote_best_effort(repo, config, session))
+            print(_format_sync_completion_response(response, session))
             _print_remote_sync_errors(remote_errors)
-            return 0
+            return 0 if response.get("type") == "ack" else 1
         socket_path = repo / config.socket_path
         if not socket_path.exists():
             raise RuntimeError("cocodex daemon is not running")
         raw = send_message(
             socket_path,
             {"type": "ready_to_integrate", "session": session.name},
-            timeout=5,
+            timeout=SYNC_DAEMON_TIMEOUT,
         )
         response = decode_message(raw)
         if response.get("type") == "error":
-            raise RuntimeError(response["message"])
-        if response.get("type") == "queued" and response.get("session") == session.name:
-            print(f"Queued {session.name} for sync")
+            _print_sync_refusal(response["message"], repo=repo, session=session)
             _print_remote_sync_errors(remote_errors)
-            return 0
+            return 1
         if response.get("type") == "ack" and response.get("session") == session.name:
             remote_errors.append(_sync_remote_best_effort(repo, config, session))
             message = response.get("message") or "no changes to sync"
@@ -261,126 +217,6 @@ def _main(argv: list[str] | None = None) -> int:
             _print_remote_sync_errors(remote_errors)
             return 0
         raise RuntimeError("Unexpected sync response")
-    if args.command == "resume":
-        from .config import find_cocodex_root, load_config, validate_config
-        from .daemon import send_control_message
-        from .state import (
-            connect,
-            enqueue_session,
-            get_lock,
-            get_session,
-            initialize_schema,
-            list_queue,
-            set_lock,
-            transition_session,
-        )
-        from .tasks import task_file_path
-
-        repo = find_cocodex_root()
-        config = load_config(repo)
-        validate_config(repo, config)
-        db = connect(repo)
-        initialize_schema(db)
-        session = get_session(db, args.session)
-        if session is None:
-            raise RuntimeError(f"Unknown session: {args.session}")
-        if session.state not in {"blocked", "recovery_required"}:
-            raise RuntimeError(f"Cannot resume {args.session} from {session.state}")
-        lock = get_lock(db)
-        if session.active_task is not None:
-            if lock is not None and lock != {"owner": args.session, "task_id": session.active_task}:
-                raise RuntimeError(
-                    f"Cannot resume {args.session}; integration lock is held by "
-                    f"{lock['owner']} ({lock['task_id']})"
-                )
-            task_path = task_file_path(repo, session.active_task)
-            if not task_path.exists():
-                raise RuntimeError(f"Cannot resume {args.session}; task file is missing: {task_path}")
-            if lock is None:
-                set_lock(db, owner=args.session, task_id=session.active_task)
-            transition_session(
-                db,
-                args.session,
-                "fusing",
-                reason="manual resume active task",
-                active_task=session.active_task,
-            )
-            refreshed = get_session(db, args.session)
-            injected = False
-            if refreshed is not None and refreshed.connected and refreshed.control_socket:
-                response = send_control_message(
-                    refreshed,
-                    {
-                        "type": "start_fusion",
-                        "session": args.session,
-                        "task_id": session.active_task,
-                        "task_file": str(task_path),
-                    },
-                )
-                injected = bool(response.get("prompt_injected"))
-            print(f"Resumed active task for {args.session}: {session.active_task}")
-            print(f"Task file: {task_path}")
-            if injected:
-                print("Prompt injected: yes")
-            elif refreshed is not None and refreshed.connected:
-                print("Prompt injected: no")
-            else:
-                print(f"Session is disconnected; run `cocodex join {args.session}` to continue.")
-            return 0
-        if lock is not None:
-            raise RuntimeError(
-                f"Cannot resume {args.session}; integration lock is held by "
-                f"{lock['owner']} ({lock['task_id']})"
-            )
-        queued = [name for name in list_queue(db) if name != args.session]
-        if queued:
-            raise RuntimeError(f"Cannot resume {args.session}; {queued[0]} is already waiting to sync")
-        transition_session(db, args.session, "queued", reason="manual resume", active_task=None)
-        enqueue_session(db, args.session)
-        print(f"Resumed {args.session}")
-        return 0
-    if args.command == "abandon":
-        from .config import find_cocodex_root, load_config, validate_config
-        from .git import add_all, current_head, is_dirty, run_git, update_ref
-        from .state import (
-            connect,
-            dequeue_session,
-            get_lock,
-            get_session,
-            initialize_schema,
-            set_lock,
-            transition_session,
-        )
-
-        repo = find_cocodex_root()
-        validate_config(repo, load_config(repo))
-        db = connect(repo)
-        initialize_schema(db)
-        session = get_session(db, args.session)
-        if session is None:
-            raise RuntimeError(f"Unknown session: {args.session}")
-        old_active_task = session.active_task
-        backup_ref = _create_abandon_backup(
-            session,
-            current_head=current_head,
-            update_ref=update_ref,
-            is_dirty=is_dirty,
-            add_all=add_all,
-            run_git=run_git,
-        )
-        transition_session(db, args.session, "abandoned", reason="manual abandon", active_task=None)
-        dequeue_session(db, args.session)
-        lock = get_lock(db)
-        if lock is not None and lock["owner"] == args.session and (
-            old_active_task is None or lock["task_id"] == old_active_task
-        ):
-            set_lock(db, owner=None, task_id=None)
-        print(f"Abandoned {args.session}")
-        if backup_ref is not None:
-            print(f"Backup ref: {backup_ref}")
-        if old_active_task is not None:
-            print(f"Task: {old_active_task}")
-        return 0
     return 0
 
 
@@ -399,8 +235,6 @@ def _truthy_env(value: str | None) -> bool:
 
 
 def _format_sync_completion_response(response: dict, session) -> str:
-    from .failures import format_failure_handling
-
     if response.get("type") == "error":
         raise RuntimeError(response["message"])
     response_session = response.get("session")
@@ -409,17 +243,6 @@ def _format_sync_completion_response(response: dict, session) -> str:
         raise RuntimeError("Unexpected sync completion response")
     if response.get("type") == "ack":
         return f"Published {response_session} {task_id}"
-    if response.get("type") == "blocked":
-        reason = response.get("reason") or "blocked"
-        return (
-            f"Blocked {response_session} {task_id}: {reason}"
-            + format_failure_handling(
-                reason=reason,
-                session=session.name,
-                state=session.state,
-                active_task=session.active_task,
-            )
-        )
     raise RuntimeError("Unexpected sync completion response")
 
 
@@ -449,24 +272,50 @@ def _print_remote_sync_errors(errors: list[str | None]) -> None:
         print(f"cocodex: warning: {error}", file=sys.stderr)
 
 
-def _create_abandon_backup(session, *, current_head, update_ref, is_dirty, add_all, run_git) -> str | None:
-    try:
-        worktree = Path(session.worktree)
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-        safe_session = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in session.name)
-        task = session.active_task or "manual"
-        backup_ref = f"refs/cocodex/backups/{stamp}/{safe_session}/{task}"
-        if is_dirty(worktree):
-            add_all(worktree)
-            snapshot = run_git(
-                worktree,
-                ["stash", "create", f"cocodex abandon backup: {session.name} {task}"],
-            )
-            run_git(worktree, ["reset"], check=False)
-            target = snapshot or current_head(worktree)
-        else:
-            target = current_head(worktree)
-        update_ref(worktree, backup_ref, target)
-        return backup_ref
-    except Exception:
-        return None
+def _print_sync_refusal(reason: str, *, repo, session) -> None:
+    from .failures import format_failure_handling
+
+    print(f"cocodex: {reason}", file=sys.stderr)
+    if session.active_task is not None:
+        from .tasks import task_file_path, validation_file_path
+
+        print(
+            "\n".join(
+                [
+                    "",
+                    f"Cocodex cannot sync {session.name} yet.",
+                    "",
+                    f"Reason: {reason}",
+                    "",
+                    f"This is {session.name}'s own unfinished sync task.",
+                    "",
+                    f"Task: {session.active_task}",
+                    f"Task file: {task_file_path(repo, session.active_task)}",
+                    f"Validation file: {validation_file_path(repo, session.active_task)}",
+                    "",
+                    f"What {session.name} should do:",
+                    "- Stay in this managed worktree.",
+                    "- Finish the semantic merge described by the task file.",
+                    "- Commit the candidate with the configured Git identity.",
+                    "- write the validation report.",
+                    "- Run `cocodex sync` again from this same worktree.",
+                    "",
+                    "What not to do:",
+                    "- Do not run git pull, git merge main, git reset, or git push main manually.",
+                    "- Do not ask another developer to sync this task.",
+                    "",
+                ]
+            ),
+            file=sys.stderr,
+        )
+        return
+    print(
+        format_failure_handling(
+            reason=reason,
+            session=session.name,
+            state=session.state,
+            active_task=session.active_task,
+        ),
+        file=sys.stderr,
+        end="",
+    )

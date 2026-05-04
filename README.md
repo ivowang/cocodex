@@ -31,11 +31,11 @@ or `git push main` directly. Cocodex is the only writer to local `main`.
 Cocodex installs local Git hooks that block ordinary direct writes and pushes
 to `main`; intentional maintenance must be done outside the developer workflow.
 
-If a remote is configured, every `cocodex sync` also tries to force-sync local
-`main` and the current session branch to that remote. It does not push or prune
-other developers' branches. Remote sync is best-effort: network or
-authentication failures are reported as warnings and retried on later
-`cocodex sync` commands.
+If a remote is configured, every successful local `cocodex sync` also tries to
+force-sync local `main`, the current session branch, and Cocodex recovery refs
+to that remote. It does not push or prune other developers' branches. Remote
+sync is best-effort: network or authentication failures are reported as
+warnings and retried on later successful `cocodex sync` commands.
 
 The daemon does not automatically integrate dirty sessions. Local work stays in
 the developer's managed worktree until that developer or their Codex explicitly
@@ -64,11 +64,12 @@ Inspection commands:
 ```bash
 cocodex status
 cocodex log
-cocodex task alice
 ```
 
-`resume` and `abandon` recovery commands exist for operators, but they are not
-part of the normal developer workflow.
+There are no manual recovery commands. If a sync cannot proceed, run
+`cocodex status` or `cocodex log` for inspection, then let the named owning
+developer run `cocodex join <name>` if needed and `cocodex sync` from their own
+managed worktree.
 
 ## Installation
 
@@ -205,9 +206,9 @@ For advanced setups, override the target explicitly:
 cocodex join --tmux-target "$TMUX_PANE" alice
 ```
 
-If `join` is not running inside tmux, Cocodex prints the task and prompt file
-paths instead. The developer then needs to open the task file from the session
-worktree and follow it manually.
+For normal semantic sync tasks, `join` must be running inside tmux so Cocodex
+can paste the prompt and send Enter. If no tmux target is available, Cocodex
+refuses task startup and restores the session snapshot for retry.
 
 The generated `AGENTS.md` tells Codex that it is in a Cocodex-managed
 collaboration session and that normal synchronization uses only
@@ -226,9 +227,9 @@ Cocodex reuses `.cocodex/worktrees/alice` and `cocodex/alice`. On startup,
 development continues:
 
 - an active sync task is re-announced with its task and validation file paths;
-- a safely recoverable interrupted task is moved back to `fusing`;
-- a queued sync request from an interrupted startup window is reported so Codex
-  waits for the task;
+- a safely recoverable interrupted task is kept or moved back to `fusing`;
+- an interrupted task startup that never safely reached Codex is normalized
+  after restoring the snapshot when possible;
 - a clean session that only fell behind `main` is reported, but not moved;
 - local unintegrated work is reported so Codex reviews it before starting
   unrelated work.
@@ -282,12 +283,15 @@ lock is free, Cocodex:
 
 If Git reports a conflict, leaves an unsafe state, or the lightweight checks
 fail, Cocodex resets Alice's worktree to latest `main`, writes a task file under
-`.cocodex/tasks/`, and pastes the sync prompt into Alice's Codex terminal when
-tmux is available. Alice's Codex then reads the task file and re-implements or
-semantically merges Alice's feature on top of the latest `main`. If the task
-arrives while Codex is working on another request, Codex should pause at a safe
-point, preserve that request's remaining intent, complete the sync task, and
-then resume the paused work after sync succeeds.
+`.cocodex/tasks/`, pastes the sync prompt into Alice's Codex terminal, and sends
+Enter. A semantic task is accepted only after that prompt injection succeeds.
+If Cocodex cannot safely inject the prompt, it restores Alice's snapshot, releases
+the lock, rejects this `sync`, and leaves Alice's work available for retry.
+Alice's Codex then reads the task file and re-implements or semantically merges
+Alice's feature on top of the latest `main`. If the task arrives while Codex is
+working on another request, Codex should pause at a safe point, preserve that
+request's remaining intent, complete the sync task, and then resume the paused
+work after sync succeeds.
 
 For each task, Codex designs and runs sufficient validation for the semantic
 merge. That can mean existing tests, new or updated tests, targeted scripts, or
@@ -305,8 +309,9 @@ best-effort syncs the configured remote if one exists. Other session worktrees
 are not moved or notified as part of this publish.
 
 If the task cannot be completed safely, Codex should stop and explain the
-blocker in its session output. An operator can inspect `cocodex status` and
-`cocodex task <name>` before deciding how to recover.
+blocker in its session output. Cocodex keeps the active task in `fusing`, keeps
+the lock with that session, and rejects later `sync` attempts until the same
+session has a committed candidate and validation report.
 
 ## Normal Example
 
@@ -359,7 +364,8 @@ Cocodex prefers stopping over guessing:
 
 - a dirty session is not integrated until its owner runs `sync`;
 - one session's `sync` never fast-forwards another session's worktree;
-- remote sync only force-pushes local `main` and the current session branch;
+- remote sync only force-pushes local `main`, the current session branch, and
+  Cocodex recovery refs after local sync has succeeded;
 - only one session owns the integration lock at a time;
 - a second session's `sync` is rejected while another session is already
   syncing;
@@ -367,47 +373,53 @@ Cocodex prefers stopping over guessing:
   task is created;
 - local Git hooks block ordinary direct writes and pushes to `main`;
 - running `sync` before committing a task candidate is rejected;
-- missing or insufficient validation reports keep the task locked so the same
-  session can write the report and run `sync` again;
+- rejected active-task publishes do not create persistent `blocked` states; the
+  task remains active so the same session can fix the issue and run `sync`
+  again;
+- active-task publish requires the task file, snapshot ref, base ref,
+  validation report, and candidate commit to remain intact;
+- startup cleanup creates backup refs before clearing interrupted task state;
 - remote sync failures do not block local progress; Cocodex warns and retries
   on the next `sync`;
-- unexpected recovery states require operator inspection.
+- interrupted active tasks are re-announced by `cocodex join <name>`; legacy
+  recovery states are normalized instead of becoming the normal workflow.
 
-## Recovery And Resume
+## Refusals And Recovery
 
 Use `cocodex status` first. It shows daemon/session versions, guard status,
-each session state, active task, blocked reason, branch head, configured
-remote, and whether the integration lock is held. Use `cocodex task <name>` to
-inspect one session's active task file, validation file, snapshot ref, and base
-ref.
-
-## Failure Handling Flow
+each session state, active task, branch head, configured remote, and whether
+the integration lock is held. When a session has an active task, `status`
+also shows its task file, validation file, snapshot ref, base ref, and next
+safe action.
 
 When a Cocodex command fails, do not immediately run Git recovery commands by
 hand. Keep the affected worktree as-is and follow this order:
 
-1. Read the failure output. Recent Cocodex versions print a `Cocodex failure
-   handling` block with the next safe action.
+1. Read the refusal output. Cocodex prints a `Cocodex sync refused` block with
+   the next safe action.
 2. Run `cocodex status` from the project repository to identify the affected
    session, state, active task, lock owner, and version mismatch if any.
-3. If the session has an active task, run `cocodex task <name>` and inspect the
-   task file, validation file, snapshot ref, and base ref.
-4. Decide whether the same developer session can continue, or whether an
-   operator must intervene.
-5. Only after the next action is clear, run `cocodex sync`, `cocodex resume
-   <name>`, or `cocodex abandon <name>`.
+3. If the session has an active task, read the task file and validation path
+   shown by `status` or the refusal output.
+4. Let the same developer session continue whenever possible. Most refusals are
+   fixed by committing the candidate, cleaning the worktree, adding validation,
+   restarting `cocodex join <name>`, or retrying after the current lock owner
+   finishes.
 
 Common cases:
 
 - `integration busy`: do nothing to the worktree; retry `cocodex sync` from the
-  same worktree after the current lock owner finishes.
-- Active task blocked because the candidate is missing, dirty, or lacks a
-  validation report: the same Codex session fixes the task and runs
+  same worktree after the current lock owner finishes. If the message says the
+  owner is disconnected, ask that developer to restart with
+  `cocodex join <name>` and then run `cocodex sync` from their managed
+  worktree.
+- Active task refused because the candidate is missing, dirty, lacks a
+  validation report, or is missing its task/snapshot/base handles: the task
+  remains `fusing`; the same Codex session fixes the issue and runs
   `cocodex sync` again.
-- Taskless `blocked`: an operator fixes the external blocker, then runs
-  `cocodex resume <name>` from the project repository.
-- `recovery_required`: an operator inspects `cocodex status`, `cocodex log`,
-  and `cocodex task <name>` before resuming or abandoning.
+- Main worktree dirty or unsafe: clean the project repository's main worktree,
+  then retry `cocodex sync` from the managed session worktree. Cocodex has not
+  moved `main` or discarded the session work.
 - `version mismatch`: restart that developer's `cocodex join <name>` after the
   installed Cocodex package has been upgraded.
 - Remote sync warning: local publish already completed; fix network or Git
@@ -415,42 +427,16 @@ Common cases:
 - `Cocodex protects main`: the hook blocked direct `main` work. Continue in a
   managed worktree and publish through `cocodex sync`.
 
-Do not use `abandon` as the first response to a failure. `abandon` is for tasks
-that should be discarded or recovered manually; it creates a backup ref before
-clearing Cocodex bookkeeping, but it is still an operator decision.
-
-For normal task blocks, do not use `resume` immediately. If a session is
-`blocked` with a task id because the candidate was not committed, the worktree
-is dirty before validation, or the validation report is missing, the owning
-Codex should fix that issue in the same managed worktree and run
-`cocodex sync` again. The integration lock remains with that task so no other
-session can publish over it.
-
-Use `cocodex resume <name>` when `status` shows a blocked or recovery session
-that needs operator help. This is an operator action from the project
-repository, not a normal developer command. If the session has an active task,
-`resume` restores that task under the integration lock and re-announces the task
-to the session agent when it is connected. If the session has no active task,
-fix the underlying blocker first, then resume. For example, if direct publish
-failed because the project repository's main worktree had local files that
-would be overwritten, clean or move those files in the main worktree, then run:
-
-```bash
-cocodex resume alice
-```
-
-After taskless resume, Cocodex retries that session when the daemon can process
-it. If the session's Codex window was closed, restart it with:
+If a developer's Codex window was closed during an active task, restart it with:
 
 ```bash
 cocodex join alice
 ```
 
-Use `cocodex abandon <name>` only when the active Cocodex task should be
-discarded or manually recovered outside Cocodex. `abandon` clears Cocodex's
-queue/task/lock bookkeeping for that session; it does not revert files or
-commits in the session worktree. Before clearing state, it creates a backup ref
-under `refs/cocodex/backups/...` and prints it.
+Cocodex re-announces the active task and keeps the lock with Alice until Alice
+publishes through `cocodex sync`. If legacy state from an older Cocodex version
+is present, `cocodex sync` and `cocodex join <name>` normalize what is safe to
+normalize and otherwise print the owning session and next action.
 
 Keep the project repository's main worktree clean during normal operation.
 Developer edits belong in `.cocodex/worktrees/<name>`. Uncommitted files in the
@@ -472,9 +458,6 @@ cocodex daemon
 cocodex join alice
 cocodex status
 cocodex log
-cocodex task alice
-cocodex resume alice
-cocodex abandon alice
 ```
 
 ## Troubleshooting
@@ -488,18 +471,25 @@ command is being run from a repository with a different Cocodex config.
 `.cocodex/worktrees/<name>`. Start or re-enter the session with
 `cocodex join <name>`, then run `!cocodex sync` from that Codex session.
 
-If Cocodex prints task and prompt file paths instead of pasting into Codex,
-`join` probably was not started from a tmux pane, or tmux prompt injection
-failed. Read the task file in the session worktree and follow it manually, or
-restart the session from the developer's tmux pane with `cocodex join <name>`.
+If Cocodex refuses a semantic task because no tmux target is available, `join`
+was probably not started from the developer's tmux pane. Restart the session
+from that pane with `cocodex join <name>`, then retry `!cocodex sync`. Cocodex
+restores the snapshot before rejecting the task, so the developer's work remains
+available for retry.
 
 Remote sync warnings are non-fatal. Fix the network or Git authentication
 problem when convenient; Cocodex retries remote synchronization on later
 `cocodex sync` commands.
 
-`integration busy: <name> is syncing task ...` means another session currently
+`integration busy: <name> is syncing ...` means another session currently
 owns the integration lock or is about to receive a sync task. Keep your
 worktree as-is and run `!cocodex sync` again after that sync finishes.
+
+`integration busy: <name> is disconnected while syncing ...` means the lock
+owner was interrupted while holding an active sync task. Do not work around the
+lock. The owner should run `cocodex join <name>` from the project repository and
+then run `cocodex sync` from their managed worktree. Other developers should
+keep their own worktrees unchanged and retry after the owner finishes.
 
 `Cocodex protects main` means a Git hook blocked a direct write or push to
 `main`. Do developer work in `.cocodex/worktrees/<name>` and publish with
@@ -517,10 +507,11 @@ initialized without `--remote origin`; edit the config or reinitialize
 intentionally before expecting remote sync.
 
 `sync already in progress (publishing)` should be short-lived. If it persists,
-run `cocodex status` and `cocodex log`. A blocked session with no lock usually
-means the operator should fix the logged blocker and run `cocodex resume
-<name>`. A `publishing` session with no lock after a daemon crash should be
-handled by restarting the daemon so startup recovery can move it to
-`recovery_required`.
+restart the daemon and run `cocodex join <name>` for the affected session.
+Startup normalization keeps active tasks in `fusing` when they can continue and
+creates backup refs before clearing incomplete task startup state. If a legacy
+session has no recorded baseline, Cocodex adopts a safe baseline only when Git
+ancestry proves the session is merely ahead of or behind `main`; divergent
+unknown-baseline sessions are refused for operator inspection.
 
 Implementation details are documented in [docs/DEV.md](docs/DEV.md).

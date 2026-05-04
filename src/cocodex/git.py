@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -127,6 +128,13 @@ def force_push_session_refs(
         timeout=timeout,
         internal_write=True,
     )
+    if run_git(repo, ["for-each-ref", "--format=%(refname)", "refs/cocodex"]):
+        run_git(
+            repo,
+            ["push", "--force", remote, "+refs/cocodex/*:refs/cocodex/*"],
+            timeout=timeout,
+            internal_write=True,
+        )
 
 
 def try_force_push_session_refs(
@@ -187,6 +195,28 @@ def reset_hard(repo: Path, ref: str) -> None:
 
 def update_ref(repo: Path, ref: str, target: str) -> None:
     run_git(repo, ["update-ref", ref, target])
+
+
+def create_backup_ref(
+    worktree: Path,
+    *,
+    session_name: str,
+    task_id: str | None,
+    reason: str,
+) -> str:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    safe_session = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in session_name)
+    safe_task = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in (task_id or "manual"))
+    backup_ref = f"refs/cocodex/backups/{stamp}/{safe_session}/{safe_task}"
+    if is_dirty(worktree):
+        add_all(worktree)
+        snapshot = run_git(worktree, ["stash", "create", f"cocodex backup: {session_name} {reason}"])
+        run_git(worktree, ["reset"], check=False)
+        target = snapshot or current_head(worktree)
+    else:
+        target = current_head(worktree)
+    update_ref(worktree, backup_ref, target)
+    return backup_ref
 
 
 def git_dir(repo: Path) -> Path:
