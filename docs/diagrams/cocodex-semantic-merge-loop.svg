@@ -1,0 +1,130 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1460" height="900" viewBox="0 0 1460 900" role="img" aria-labelledby="title desc">
+  <title id="title">Fig. 3: Cocodex semantic merge loop</title>
+  <desc id="desc">A detailed diagram of the semantic merge path, from snapshot creation and task prompt delivery to Codex-authored behavioral union, validation, candidate commit, and publication.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8.5" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 9.5 5 L 0 10 z" fill="#263448"/>
+    </marker>
+    <style><![CDATA[
+      text { font-family: "Inter", "IBM Plex Sans", Arial, sans-serif; fill: #172033; }
+      .title { font-size: 26px; font-weight: 700; }
+      .subtitle { font-size: 14px; fill: #5d6878; }
+      .label { font-size: 15px; font-weight: 700; }
+      .step { font-size: 13px; font-weight: 700; fill: #2f5f9f; }
+      .small { font-size: 12px; fill: #5d6878; }
+      .mono { font-family: "SFMono-Regular", Consolas, monospace; font-size: 11.5px; fill: #263448; }
+      .panel { fill: #f7f8fb; stroke: #9aa3b2; stroke-width: 1.2; rx: 9; }
+      .box { fill: #ffffff; stroke: #7d8798; stroke-width: 1.35; rx: 8; }
+      .main { fill: #eef8f1; stroke: #3c7a4f; }
+      .snap { fill: #fff7e7; stroke: #a66b1f; }
+      .codex { fill: #edf4ff; stroke: #2f5f9f; }
+      .risk { fill: #fff1f1; stroke: #a84747; }
+      .line { fill: none; stroke: #263448; stroke-width: 1.45; marker-end: url(#arrow); }
+      .dash { stroke-dasharray: 6 5; }
+    ]]></style>
+  </defs>
+
+  <text x="56" y="54" class="title">Semantic integration is a Codex-authored behavioral union</text>
+  <text x="56" y="80" class="subtitle">Cocodex creates a precise task; the owner Codex re-expresses the snapshot feature on latest main, validates it, commits it, and runs sync again.</text>
+
+  <rect x="58" y="122" width="388" height="620" class="panel"/>
+  <text x="86" y="153" class="label">Daemon prepares an integration task</text>
+
+  <g transform="translate(86,188)">
+    <rect width="310" height="84" class="box snap"/>
+    <text x="18" y="24" class="step">1. Snapshot owner work</text>
+    <text x="18" y="47" class="small">Commit dirty changes if needed and preserve</text>
+    <text x="18" y="66" class="mono">refs/cocodex/snapshots/&lt;task&gt;</text>
+  </g>
+  <g transform="translate(86,310)">
+    <rect width="310" height="84" class="box main"/>
+    <text x="18" y="24" class="step">2. Capture latest main baseline</text>
+    <text x="18" y="47" class="small">Save the main commit used for the task.</text>
+    <text x="18" y="66" class="mono">refs/cocodex/bases/&lt;task&gt;</text>
+  </g>
+  <g transform="translate(86,432)">
+    <rect width="310" height="104" class="box codex"/>
+    <text x="18" y="24" class="step">3. Write task and prompt files</text>
+    <text x="18" y="47" class="small">Task includes diff summary, merge discipline,</text>
+    <text x="18" y="66" class="small">validation requirements, and contradiction rules.</text>
+    <text x="18" y="86" class="mono">.cocodex/tasks/&lt;task&gt;.md</text>
+  </g>
+  <g transform="translate(86,574)">
+    <rect width="310" height="94" class="box"/>
+    <text x="18" y="24" class="step">4. Reset session to latest main</text>
+    <text x="18" y="47" class="small">The current worktree becomes the main baseline</text>
+    <text x="18" y="66" class="small">onto which the snapshot feature is rebuilt.</text>
+  </g>
+
+  <rect x="536" y="122" width="388" height="620" class="panel"/>
+  <text x="564" y="153" class="label">Owner Codex performs semantic merge</text>
+
+  <g transform="translate(564,188)">
+    <rect width="310" height="90" class="box codex"/>
+    <text x="18" y="24" class="step">5. Prompt is pasted to tmux</text>
+    <text x="18" y="47" class="small">Cocodex does not press Enter.</text>
+    <text x="18" y="66" class="small">Developer confirms by pressing Enter.</text>
+  </g>
+  <g transform="translate(564,312)">
+    <rect width="310" height="112" class="box codex"/>
+    <text x="18" y="24" class="step">6. Reconstruct the union</text>
+    <text x="18" y="47" class="small">Inspect latest main and snapshot behavior.</text>
+    <text x="18" y="66" class="small">Use latest main's architecture as baseline.</text>
+    <text x="18" y="85" class="small">Do not blindly replay old diffs or drop features.</text>
+  </g>
+  <g transform="translate(564,462)">
+    <rect width="310" height="104" class="box risk"/>
+    <text x="18" y="24" class="step">7. Ask on true contradictions</text>
+    <text x="18" y="47" class="small">Mutually exclusive API, schema, product,</text>
+    <text x="18" y="66" class="small">security, invariant, or test requirements</text>
+    <text x="18" y="85" class="small">must be resolved by the user.</text>
+  </g>
+  <g transform="translate(564,604)">
+    <rect width="310" height="94" class="box main"/>
+    <text x="18" y="24" class="step">8. Validate, commit, report</text>
+    <text x="18" y="47" class="small">Design sufficient checks, commit candidate,</text>
+    <text x="18" y="66" class="small">write .validation.md, keep worktree clean.</text>
+  </g>
+
+  <rect x="1014" y="122" width="388" height="620" class="panel"/>
+  <text x="1042" y="153" class="label">Cocodex publishes only after proof points</text>
+
+  <g transform="translate(1042,188)">
+    <rect width="310" height="104" class="box codex"/>
+    <text x="18" y="24" class="step">9. Owner runs cocodex sync again</text>
+    <text x="18" y="47" class="small">The active task path reports current HEAD</text>
+    <text x="18" y="66" class="small">as the candidate for local main.</text>
+    <text x="18" y="86" class="mono">fusion_done</text>
+  </g>
+  <g transform="translate(1042,330)">
+    <rect width="310" height="112" class="box"/>
+    <text x="18" y="24" class="step">10. Verify task integrity</text>
+    <text x="18" y="47" class="small">Require task file, snapshot/base refs,</text>
+    <text x="18" y="66" class="small">candidate is current HEAD, worktree clean,</text>
+    <text x="18" y="85" class="small">and validation report exists.</text>
+  </g>
+  <g transform="translate(1042,480)">
+    <rect width="310" height="104" class="box main"/>
+    <text x="18" y="24" class="step">11. Fast-forward local main</text>
+    <text x="18" y="47" class="small">Move main only if publish is safe.</text>
+    <text x="18" y="66" class="small">Update session last_seen_main and</text>
+    <text x="18" y="85" class="small">release the integration lock.</text>
+  </g>
+  <g transform="translate(1042,622)">
+    <rect width="310" height="76" class="box"/>
+    <text x="18" y="24" class="step">12. Optional remote sync</text>
+    <text x="18" y="47" class="small">Best-effort push of main, owner branch,</text>
+    <text x="18" y="66" class="small">and recovery refs; warnings do not roll back.</text>
+  </g>
+
+  <path class="line" d="M 396 230 C 468 230, 488 230, 564 233"/>
+  <path class="line" d="M 396 474 C 468 474, 488 352, 564 352"/>
+  <path class="line" d="M 874 650 C 940 650, 966 238, 1042 239"/>
+  <path class="line" d="M 1197 292 L 1197 330"/>
+  <path class="line" d="M 1197 442 L 1197 480"/>
+  <path class="line" d="M 1197 584 L 1197 622"/>
+
+  <rect x="92" y="780" width="1260" height="54" class="box"/>
+  <text x="116" y="811" class="label">Key invariant</text>
+  <text x="246" y="811" class="small">The semantic task is accepted only after prompt delivery succeeds; if delivery fails, Cocodex restores the snapshot, releases the lock, and refuses sync without losing work.</text>
+</svg>

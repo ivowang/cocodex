@@ -47,6 +47,15 @@ def is_dirty(repo: Path) -> bool:
     return bool(run_git(repo, ["status", "--porcelain"]))
 
 
+def status_porcelain(repo: Path) -> list[str]:
+    output = run_git(repo, ["status", "--porcelain"])
+    return [line for line in output.splitlines() if line]
+
+
+def has_untracked_changes(repo: Path) -> bool:
+    return any(line.startswith("?? ") for line in status_porcelain(repo))
+
+
 def branch_exists(repo: Path, branch: str) -> bool:
     result = subprocess.run(
         ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
@@ -276,8 +285,8 @@ def checkout(repo: Path, ref: str) -> None:
     run_git(repo, ["checkout", ref])
 
 
-def reset_hard(repo: Path, ref: str) -> None:
-    run_git(repo, ["reset", "--hard", ref])
+def reset_hard(repo: Path, ref: str, *, internal_write: bool = False) -> None:
+    run_git(repo, ["reset", "--hard", ref], internal_write=internal_write)
 
 
 def update_ref(repo: Path, ref: str, target: str) -> None:

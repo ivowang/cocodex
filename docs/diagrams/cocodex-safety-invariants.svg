@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900" role="img" aria-labelledby="title desc">
+  <title id="title">Fig. 4: Cocodex safety invariants and maintenance surfaces</title>
+  <desc id="desc">A paper-style map of the invariants Cocodex enforces: serialized integration, recoverable work, scoped mutation, observability, guarded main, best-effort remote sync, and safe retired-session deletion.</desc>
+  <defs>
+    <style><![CDATA[
+      text { font-family: "Inter", "IBM Plex Sans", Arial, sans-serif; fill: #172033; }
+      .title { font-size: 26px; font-weight: 700; }
+      .subtitle { font-size: 14px; fill: #5d6878; }
+      .section { font-size: 15px; font-weight: 700; }
+      .small { font-size: 12px; fill: #5d6878; }
+      .mono { font-family: "SFMono-Regular", Consolas, monospace; font-size: 11.5px; fill: #263448; }
+      .panel { fill: #f7f8fb; stroke: #9aa3b2; stroke-width: 1.2; rx: 9; }
+      .box { fill: #ffffff; stroke: #7d8798; stroke-width: 1.35; rx: 8; }
+      .blue { fill: #edf4ff; stroke: #2f5f9f; }
+      .green { fill: #eef8f1; stroke: #3c7a4f; }
+      .amber { fill: #fff7e7; stroke: #a66b1f; }
+      .red { fill: #fff1f1; stroke: #a84747; }
+      .line { fill: none; stroke: #7d8798; stroke-width: 1.1; }
+    ]]></style>
+  </defs>
+
+  <text x="56" y="54" class="title">Safety invariants: fail before mutation, preserve before rewrite</text>
+  <text x="56" y="80" class="subtitle">Cocodex is designed so strange user operations lead to actionable refusal, not hidden cross-session edits or lost work.</text>
+
+  <rect x="58" y="122" width="286" height="650" class="panel"/>
+  <text x="86" y="154" class="section">Serialized integration</text>
+  <rect x="86" y="188" width="230" height="84" class="box red"/>
+  <text x="106" y="217" class="mono">locks.integration</text>
+  <text x="106" y="241" class="small">Single owner and task id.</text>
+  <text x="106" y="260" class="small">No persistent multi-user queue.</text>
+  <rect x="86" y="308" width="230" height="120" class="box"/>
+  <text x="106" y="337" class="section">Fail-fast concurrency</text>
+  <text x="106" y="361" class="small">If another owner is syncing,</text>
+  <text x="106" y="380" class="small">the requester is refused with</text>
+  <text x="106" y="399" class="small">the owner's next action.</text>
+  <rect x="86" y="464" width="230" height="120" class="box"/>
+  <text x="106" y="493" class="section">No stale candidate publish</text>
+  <text x="106" y="517" class="small">Candidate must be current HEAD</text>
+  <text x="106" y="536" class="small">and main must fast-forward.</text>
+  <text x="106" y="555" class="small">Otherwise active task remains.</text>
+
+  <rect x="394" y="122" width="286" height="650" class="panel"/>
+  <text x="422" y="154" class="section">Work preservation</text>
+  <rect x="422" y="188" width="230" height="116" class="box amber"/>
+  <text x="442" y="217" class="mono">refs/cocodex/snapshots/*</text>
+  <text x="442" y="241" class="mono">refs/cocodex/bases/*</text>
+  <text x="442" y="266" class="small">Every semantic task records</text>
+  <text x="442" y="285" class="small">the local feature and base.</text>
+  <rect x="422" y="340" width="230" height="120" class="box"/>
+  <text x="442" y="369" class="section">Prompt failure rollback</text>
+  <text x="442" y="393" class="small">If tmux delivery fails, restore</text>
+  <text x="442" y="412" class="small">the snapshot and release lock.</text>
+  <text x="442" y="431" class="small">The sync is refused safely.</text>
+  <rect x="422" y="496" width="230" height="120" class="box amber"/>
+  <text x="442" y="525" class="section">Retired-session backup</text>
+  <text x="442" y="549" class="small">delete writes a manifest and</text>
+  <text x="442" y="568" class="small">backup refs before removing</text>
+  <text x="442" y="587" class="small">worktree or branch.</text>
+
+  <rect x="730" y="122" width="286" height="650" class="panel"/>
+  <text x="758" y="154" class="section">Scoped mutation</text>
+  <rect x="758" y="188" width="230" height="120" class="box green"/>
+  <text x="778" y="217" class="section">Sync scope</text>
+  <text x="778" y="241" class="small">A sync moves only:</text>
+  <text x="778" y="264" class="mono">current worktree branch</text>
+  <text x="778" y="286" class="mono">local refs/heads/main</text>
+  <rect x="758" y="344" width="230" height="120" class="box"/>
+  <text x="778" y="373" class="section">Other sessions untouched</text>
+  <text x="778" y="397" class="small">No fast-forward, prompt, or</text>
+  <text x="778" y="416" class="small">merge occurs for another user</text>
+  <text x="778" y="435" class="small">until that owner runs sync.</text>
+  <rect x="758" y="500" width="230" height="120" class="box red"/>
+  <text x="778" y="529" class="section">Main guard hooks</text>
+  <text x="778" y="553" class="small">reference-transaction and</text>
+  <text x="778" y="572" class="small">pre-push hooks reject direct</text>
+  <text x="778" y="591" class="small">writes or pushes to main.</text>
+
+  <rect x="1066" y="122" width="286" height="650" class="panel"/>
+  <text x="1094" y="154" class="section">Observability and operations</text>
+  <rect x="1094" y="188" width="230" height="112" class="box blue"/>
+  <text x="1114" y="217" class="mono">cocodex status</text>
+  <text x="1114" y="241" class="small">Shows daemon version, guard,</text>
+  <text x="1114" y="260" class="small">lock owner, session state,</text>
+  <text x="1114" y="279" class="small">task refs, and next action.</text>
+  <rect x="1094" y="336" width="230" height="96" class="box"/>
+  <text x="1114" y="365" class="mono">cocodex log</text>
+  <text x="1114" y="389" class="small">Event timeline mirrors daemon</text>
+  <text x="1114" y="408" class="small">terminal logs for debugging.</text>
+  <rect x="1094" y="468" width="230" height="120" class="box blue"/>
+  <text x="1114" y="497" class="section">Remote sync is optional</text>
+  <text x="1114" y="521" class="small">Failures are warnings.</text>
+  <text x="1114" y="540" class="small">A later successful sync retries</text>
+  <text x="1114" y="559" class="small">main, owner branch, recovery refs.</text>
+  <rect x="1094" y="624" width="230" height="86" class="box"/>
+  <text x="1114" y="653" class="mono">cocodex delete &lt;name&gt;</text>
+  <text x="1114" y="677" class="small">Operator cleanup for sessions</text>
+  <text x="1114" y="696" class="small">the team has retired.</text>
+
+  <line x1="344" y1="447" x2="394" y2="447" class="line"/>
+  <line x1="680" y1="447" x2="730" y2="447" class="line"/>
+  <line x1="1016" y1="447" x2="1066" y2="447" class="line"/>
+
+  <rect x="90" y="806" width="1260" height="46" class="box"/>
+  <text x="112" y="834" class="small">Design rule: Cocodex prefers explicit refusal with a concrete owner/action over attempting automatic recovery that could merge, overwrite, or discard a developer's work invisibly.</text>
+</svg>

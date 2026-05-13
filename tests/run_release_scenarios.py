@@ -1090,6 +1090,71 @@ def test_direct_publish_rejects_dirty_main_without_persistent_block(h: Harness) 
     h.terminate(daemon, "direct-publish-reject-daemon")
 
 
+def test_sync_force_discards_tracked_dirty_main_before_publish(h: Harness) -> None:
+    repo = make_repo(h, "sync-force-dirty-main")
+    daemon = start_daemon(h, repo, "sync-force-dirty-main")
+    join = start_join(h, repo, "alice", "sync-force-dirty-main-alice-join")
+    worktree = repo / ".cocodex" / "worktrees" / "alice"
+
+    write(repo / "app.txt", "discard this modified generated content\n")
+    write(worktree / "feature.txt", "alice force-published feature\n")
+
+    forced = h.run(
+        "sync force dirty main: force discards tracked main noise and publishes",
+        h.cocodex("sync", "--force"),
+        worktree,
+        timeout=60,
+    )
+
+    h.require("discarded dirty main worktree changes" in forced.stderr, "force reports discarded main dirt")
+    h.require("published directly" in forced.stdout, "force publish continues after cleaning main")
+    h.require(status_porcelain(repo) == "", "force leaves main worktree clean")
+    h.require(read(repo / "app.txt") == "base\n", "force resets tracked main file before publish")
+    h.require(head(repo, "main") == head(worktree), "force publish advances main to session candidate")
+    published_feature = git(
+        h,
+        "sync force dirty main: published feature content",
+        repo,
+        "show",
+        "main:feature.txt",
+    ).stdout
+    h.require(published_feature == "alice force-published feature\n", "session feature is published")
+
+    h.terminate(join, "sync-force-dirty-main-alice-join")
+    h.terminate(daemon, "sync-force-dirty-main-daemon")
+
+
+def test_sync_force_refuses_untracked_dirty_main(h: Harness) -> None:
+    repo = make_repo(h, "sync-force-untracked-main")
+    daemon = start_daemon(h, repo, "sync-force-untracked-main")
+    join = start_join(h, repo, "alice", "sync-force-untracked-main-alice-join")
+    worktree = repo / ".cocodex" / "worktrees" / "alice"
+    original_main = head(repo, "main")
+
+    write(repo / "untracked-output.log", "do not delete automatically\n")
+    write(worktree / "feature.txt", "alice feature should remain local\n")
+
+    refused = h.run(
+        "sync force untracked main: refuses",
+        h.cocodex("sync", "--force"),
+        worktree,
+        check=False,
+        timeout=60,
+    )
+
+    h.require(refused.returncode != 0, "force refuses untracked main dirt")
+    h.require("untracked files" in refused.stderr, "force refusal explains untracked files")
+    h.require((repo / "untracked-output.log").exists(), "force does not delete untracked main files")
+    h.require(head(repo, "main") == original_main, "force refusal does not move main")
+    h.require(status_porcelain(worktree) != "", "force refusal keeps session feature intact")
+
+    (repo / "untracked-output.log").unlink()
+    h.run("sync force untracked main: retry after manual cleanup", h.cocodex("sync"), worktree, timeout=60)
+
+    h.terminate(join, "sync-force-untracked-main-alice-join")
+    h.terminate(daemon, "sync-force-untracked-main-daemon")
+
+
 def test_busy_sync_rejects_second_dirty_session(h: Harness) -> None:
     repo = make_repo(h, "busy-lock")
     daemon = start_daemon(h, repo, "busy-lock")
@@ -1684,6 +1749,8 @@ def main() -> int:
         test_git_merge_fast_path_and_conflict_fallback(h)
         test_configured_remote_pushes_main_and_session_refs(h)
         test_direct_publish_rejects_dirty_main_without_persistent_block(h)
+        test_sync_force_discards_tracked_dirty_main_before_publish(h)
+        test_sync_force_refuses_untracked_dirty_main(h)
         test_busy_sync_rejects_second_dirty_session(h)
         test_transient_active_task_sync_refuses_nonzero(h)
         test_legacy_queue_ghost_rows_are_pruned(h)

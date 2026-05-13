@@ -37,7 +37,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("log")
 
-    subparsers.add_parser("sync")
+    sync_parser = subparsers.add_parser("sync")
+    sync_parser.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "discard tracked modified or staged changes in the project main worktree "
+            "before syncing; untracked files and unsafe Git states are still refused"
+        ),
+    )
 
     delete_parser = subparsers.add_parser("delete")
     delete_parser.add_argument("session", metavar="user_name")
@@ -215,6 +223,7 @@ def _main(argv: list[str] | None = None) -> int:
         initialize_schema(db)
         session = infer_session_from_cwd(db)
         remote_errors: list[str | None] = []
+        _print_force_clean_main_notice(repo, enabled=args.force)
         if session.active_task is not None:
             socket_path = repo / config.socket_path
             if not socket_path.exists():
@@ -222,6 +231,7 @@ def _main(argv: list[str] | None = None) -> int:
             response = send_completion(
                 socket_path,
                 session,
+                force_clean_main=args.force,
                 timeout=SYNC_DAEMON_TIMEOUT,
             )
             if response.get("type") == "error":
@@ -237,7 +247,11 @@ def _main(argv: list[str] | None = None) -> int:
             raise RuntimeError("cocodex daemon is not running")
         raw = send_message(
             socket_path,
-            {"type": "ready_to_integrate", "session": session.name},
+            {
+                "type": "ready_to_integrate",
+                "session": session.name,
+                "force_clean_main": bool(args.force),
+            },
             timeout=SYNC_DAEMON_TIMEOUT,
         )
         response = decode_message(raw)
@@ -296,6 +310,24 @@ def _sync_remote_best_effort(repo, config, session) -> str | None:
         f"remote sync to {config.remote} failed and was skipped; "
         f"will retry on the next cocodex sync: {error}"
     )
+
+
+def _print_force_clean_main_notice(repo, *, enabled: bool) -> None:
+    if not enabled:
+        return
+    from .git import has_untracked_changes, has_unsafe_git_state, status_porcelain
+
+    try:
+        if has_unsafe_git_state(repo) or has_untracked_changes(repo):
+            return
+        if status_porcelain(repo):
+            print(
+                "cocodex: warning: discarded dirty main worktree changes before sync "
+                "because --force was provided",
+                file=sys.stderr,
+            )
+    except Exception:
+        return
 
 
 def _print_remote_sync_errors(errors: list[str | None]) -> None:

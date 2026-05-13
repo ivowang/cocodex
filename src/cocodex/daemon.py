@@ -17,12 +17,14 @@ from .git import (
     diff,
     diff_check,
     fast_forward_ref,
+    has_untracked_changes,
     has_unsafe_git_state,
     is_dirty,
     merge_abort,
     merge_base_is_ancestor,
     merge_commit,
     reset_hard,
+    status_porcelain,
     update_ref,
 )
 from .guard import ensure_cocodex_excluded, install_main_guard
@@ -394,14 +396,35 @@ def _main_worktree_blocker(repo: Path) -> str | None:
     if unsafe:
         return f"main worktree has unsafe Git state: {unsafe}"
     if is_dirty(repo):
-        return "main worktree is dirty; clean or commit those files before running cocodex sync"
+        return (
+            "main worktree is dirty; clean or commit those files before running cocodex sync, "
+            "or run `cocodex sync --force` if these tracked main-worktree changes are disposable"
+        )
     return None
 
 
-def _assert_main_publishable(repo: Path) -> None:
+def _assert_main_publishable(repo: Path, *, force_clean_main: bool = False) -> None:
+    if force_clean_main:
+        _force_clean_main_worktree(repo)
     blocker = _main_worktree_blocker(repo)
     if blocker is not None:
         raise RuntimeError(blocker)
+
+
+def _force_clean_main_worktree(repo: Path) -> None:
+    unsafe = has_unsafe_git_state(repo)
+    if unsafe:
+        raise RuntimeError(f"main worktree has unsafe Git state: {unsafe}")
+    status = status_porcelain(repo)
+    if not status:
+        return
+    if has_untracked_changes(repo):
+        raise RuntimeError(
+            "main worktree has untracked files; `cocodex sync --force` only discards "
+            "tracked modified or staged main-worktree changes. Move, delete, or commit "
+            "untracked files before retrying."
+        )
+    reset_hard(repo, "HEAD", internal_write=True)
 
 
 def _sync_clean_session_to_main(
@@ -430,6 +453,7 @@ def publish_without_fusion_if_current(
     config: CocodexConfig,
     session: SessionRecord,
     *,
+    force_clean_main: bool = False,
     task_id_factory: TaskIdFactory = create_task_id,
 ) -> str | None:
     if session.last_seen_main is None or get_lock(db) is not None:
@@ -439,7 +463,7 @@ def publish_without_fusion_if_current(
     if latest_main != session.last_seen_main:
         return None
 
-    _assert_main_publishable(repo)
+    _assert_main_publishable(repo, force_clean_main=force_clean_main)
     worktree = Path(session.worktree)
     unsafe = has_unsafe_git_state(worktree)
     if unsafe:
@@ -565,6 +589,8 @@ def prepare_locked_sync(
     config: CocodexConfig,
     session_name: str,
     task_id: str,
+    *,
+    force_clean_main: bool = False,
 ) -> tuple[str, Path | str, IntegrationTask | None]:
     session = get_session(db, session_name)
     if session is None:
@@ -576,7 +602,7 @@ def prepare_locked_sync(
     if get_lock(db) != {"owner": session_name, "task_id": task_id}:
         raise RuntimeError("integration lock is not held by this task")
 
-    _assert_main_publishable(repo)
+    _assert_main_publishable(repo, force_clean_main=force_clean_main)
     transition_session(db, session_name, "snapshot", reason="creating snapshot", active_task=task_id)
     task = snapshot_session_work(repo, config, session, task_id)
 
@@ -674,6 +700,7 @@ def start_integration_now(
     config: CocodexConfig,
     session: SessionRecord,
     *,
+    force_clean_main: bool = False,
     send_control: ControlSender = send_control_message,
     task_id_factory: TaskIdFactory = create_task_id,
 ) -> str:
@@ -712,6 +739,7 @@ def start_integration_now(
             config,
             session.name,
             task_id,
+            force_clean_main=force_clean_main,
         )
         if sync_result == "published":
             return str(sync_payload)
@@ -796,6 +824,7 @@ def publish_candidate(
     task_id: str,
     candidate: str,
     *,
+    force_clean_main: bool = False,
     send_control: ControlSender = send_control_message,
 ) -> None:
     session = get_session(db, session_name)
@@ -908,7 +937,7 @@ def publish_candidate(
         raise RuntimeError("worktree changed during validation")
 
     transition_session(db, session_name, "publishing", reason="validation report accepted", active_task=task_id)
-    _assert_main_publishable(repo)
+    _assert_main_publishable(repo, force_clean_main=force_clean_main)
     try:
         fast_forward_ref(repo, config.main_branch, candidate)
         set_metadata(db, "last_observed_main", candidate)
@@ -1053,6 +1082,7 @@ def handle_session_message(
         return {"type": "ack", "session": session_name}
 
     if message_type == "ready_to_integrate":
+        force_clean_main = bool(message.get("force_clean_main"))
         session = get_session(db, session_name)
         if session is None:
             raise RuntimeError(f"unknown session: {session_name}")
@@ -1092,7 +1122,13 @@ def handle_session_message(
                 "session": session_name,
                 "message": sync_message,
             }
-        direct_message = publish_without_fusion_if_current(repo, db, config, session)
+        direct_message = publish_without_fusion_if_current(
+            repo,
+            db,
+            config,
+            session,
+            force_clean_main=force_clean_main,
+        )
         if direct_message is not None:
             dequeue_session(db, session_name)
             return {
@@ -1105,6 +1141,7 @@ def handle_session_message(
             db,
             config,
             session,
+            force_clean_main=force_clean_main,
             send_control=send_control,
             task_id_factory=task_id_factory,
         )
@@ -1131,13 +1168,22 @@ def handle_session_message(
         return {"type": "ack", "session": session_name, "task_id": task_id}
 
     if message_type == "fusion_done":
+        force_clean_main = bool(message.get("force_clean_main"))
         task_id = message["task_id"]
         session = get_session(db, session_name)
         if session is None:
             raise RuntimeError(f"unknown session: {session_name}")
         session = _normalize_active_task_for_sync(repo, db, session, task_id)
         candidate = current_head(Path(session.worktree))
-        publish_candidate(repo, db, config, session_name, task_id, candidate)
+        publish_candidate(
+            repo,
+            db,
+            config,
+            session_name,
+            task_id,
+            candidate,
+            force_clean_main=force_clean_main,
+        )
         return {"type": "ack", "session": session_name, "task_id": task_id}
 
     return {"type": "ack", "session": session_name}

@@ -1,0 +1,168 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1480" height="1020" viewBox="0 0 1480 1020" role="img" aria-labelledby="title desc">
+  <title id="title">Fig. 2: Cocodex sync decision flow</title>
+  <desc id="desc">The decision graph followed by cocodex sync, including clean catch-up, direct publish, clean Git merge, semantic task startup, active-task completion, and integration-busy refusal.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8.5" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 9.5 5 L 0 10 z" fill="#263448"/>
+    </marker>
+    <style><![CDATA[
+      text { font-family: "Inter", "IBM Plex Sans", Arial, sans-serif; fill: #172033; }
+      .title { font-size: 26px; font-weight: 700; }
+      .subtitle { font-size: 14px; fill: #5d6878; }
+      .label { font-size: 14px; font-weight: 700; }
+      .small { font-size: 12px; fill: #5d6878; }
+      .tiny { font-size: 11px; fill: #5d6878; }
+      .mono { font-family: "SFMono-Regular", Consolas, monospace; font-size: 11.5px; fill: #263448; }
+      .node { fill: #ffffff; stroke: #7d8798; stroke-width: 1.35; rx: 8; }
+      .decision { fill: #f7f8fb; stroke: #56657a; stroke-width: 1.4; }
+      .ok { fill: #eef8f1; stroke: #3c7a4f; }
+      .warn { fill: #fff7e7; stroke: #a66b1f; }
+      .task { fill: #edf4ff; stroke: #2f5f9f; }
+      .stop { fill: #fff1f1; stroke: #a84747; }
+      .line { fill: none; stroke: #263448; stroke-width: 1.45; marker-end: url(#arrow); }
+      .dash { stroke-dasharray: 6 5; }
+    ]]></style>
+  </defs>
+
+  <text x="56" y="54" class="title">The single developer command: cocodex sync</text>
+  <text x="56" y="80" class="subtitle">The command is executed inside the current managed worktree; the session name is inferred from the worktree root.</text>
+
+  <g transform="translate(72,122)">
+    <rect width="218" height="72" class="node task"/>
+    <text x="18" y="28" class="label">Start</text>
+    <text x="18" y="50" class="mono">!cocodex sync</text>
+  </g>
+
+  <g transform="translate(360,122)">
+    <rect width="258" height="72" class="node"/>
+    <text x="18" y="28" class="label">Infer owner session</text>
+    <text x="18" y="50" class="small">Match cwd to registered worktree.</text>
+  </g>
+
+  <g transform="translate(700,110)">
+    <polygon points="118,0 236,58 118,116 0,58" class="decision"/>
+    <text x="69" y="53" class="label">Active task?</text>
+    <text x="77" y="75" class="small">same session</text>
+  </g>
+
+  <g transform="translate(1032,80)">
+    <rect width="290" height="118" class="node task"/>
+    <text x="18" y="27" class="label">Complete semantic task</text>
+    <text x="18" y="49" class="small">Require committed candidate, clean worktree,</text>
+    <text x="18" y="68" class="small">task refs, and validation report.</text>
+    <text x="18" y="90" class="mono">fusion_done -> publish_candidate</text>
+  </g>
+
+  <g transform="translate(1032,242)">
+    <rect width="290" height="96" class="node ok"/>
+    <text x="18" y="28" class="label">Publish candidate</text>
+    <text x="18" y="51" class="small">Fast-forward local main, update last_seen_main,</text>
+    <text x="18" y="70" class="small">release lock, then best-effort remote sync.</text>
+  </g>
+
+  <g transform="translate(700,290)">
+    <polygon points="118,0 236,58 118,116 0,58" class="decision"/>
+    <text x="59" y="53" class="label">Local work?</text>
+    <text x="56" y="75" class="small">dirty or ahead of base</text>
+  </g>
+
+  <g transform="translate(360,290)">
+    <rect width="258" height="96" class="node ok"/>
+    <text x="18" y="29" class="label">Clean catch-up path</text>
+    <text x="18" y="52" class="small">If branch only fell behind main, fast-forward</text>
+    <text x="18" y="71" class="small">this worktree and update last_seen_main.</text>
+  </g>
+
+  <g transform="translate(700,488)">
+    <polygon points="118,0 236,58 118,116 0,58" class="decision"/>
+    <text x="47" y="52" class="label">Based on latest</text>
+    <text x="74" y="74" class="small">main?</text>
+  </g>
+
+  <g transform="translate(1032,466)">
+    <rect width="290" height="112" class="node ok"/>
+    <text x="18" y="29" class="label">Direct publish path</text>
+    <text x="18" y="52" class="small">If needed, git add -A and commit snapshot</text>
+    <text x="18" y="71" class="small">with the session identity.</text>
+    <text x="18" y="91" class="small">Fast-forward local main and sync remote.</text>
+  </g>
+
+  <g transform="translate(700,690)">
+    <polygon points="118,0 236,58 118,116 0,58" class="decision"/>
+    <text x="51" y="53" class="label">Lock free and</text>
+    <text x="48" y="75" class="label">agent alive?</text>
+  </g>
+
+  <g transform="translate(1032,664)">
+    <rect width="290" height="118" class="node stop"/>
+    <text x="18" y="28" class="label">Refuse, do not mutate</text>
+    <text x="18" y="51" class="small">Print the lock owner or missing session action.</text>
+    <text x="18" y="70" class="small">The developer keeps this worktree unchanged</text>
+    <text x="18" y="89" class="small">and retries after the owner finishes.</text>
+  </g>
+
+  <g transform="translate(360,640)">
+    <rect width="258" height="120" class="node warn"/>
+    <text x="18" y="29" class="label">Acquire lock and snapshot</text>
+    <text x="18" y="52" class="small">Freeze session agent, create snapshot commit,</text>
+    <text x="18" y="71" class="small">write refs/cocodex/snapshots/* and bases/*.</text>
+    <text x="18" y="92" class="small">Main worktree must be clean and safe.</text>
+  </g>
+
+  <g transform="translate(360,818)">
+    <polygon points="129,0 258,58 129,116 0,58" class="decision"/>
+    <text x="63" y="53" class="label">Git merge +</text>
+    <text x="57" y="75" class="label">checks pass?</text>
+  </g>
+
+  <g transform="translate(72,816)">
+    <rect width="218" height="120" class="node ok"/>
+    <text x="18" y="28" class="label">Clean Git merge path</text>
+    <text x="18" y="51" class="small">Publish merged candidate if it contains</text>
+    <text x="18" y="70" class="small">latest main and snapshot commit and</text>
+    <text x="18" y="89" class="small">passes git diff --check.</text>
+  </g>
+
+  <g transform="translate(700,818)">
+    <rect width="296" height="120" class="node task"/>
+    <text x="18" y="28" class="label">Semantic task path</text>
+    <text x="18" y="51" class="small">Reset worktree to latest main, write task file,</text>
+    <text x="18" y="70" class="small">paste prompt into tmux, keep lock in fusing.</text>
+    <text x="18" y="91" class="small">Developer presses Enter, then Codex integrates.</text>
+  </g>
+
+  <path class="line" d="M 290 158 L 360 158"/>
+  <path class="line" d="M 618 158 L 700 168"/>
+  <path class="line" d="M 936 168 L 1032 139"/>
+  <text x="958" y="137" class="tiny">yes</text>
+  <path class="line" d="M 1177 198 L 1177 242"/>
+
+  <path class="line" d="M 818 226 L 818 290"/>
+  <text x="830" y="260" class="tiny">no</text>
+  <path class="line" d="M 700 348 L 618 348"/>
+  <text x="646" y="333" class="tiny">no</text>
+  <path class="line" d="M 818 406 L 818 488"/>
+  <text x="832" y="451" class="tiny">yes</text>
+
+  <path class="line" d="M 936 546 L 1032 522"/>
+  <text x="958" y="517" class="tiny">yes</text>
+  <path class="line" d="M 818 604 L 818 690"/>
+  <text x="831" y="650" class="tiny">no</text>
+
+  <path class="line" d="M 936 748 L 1032 723"/>
+  <text x="958" y="719" class="tiny">no</text>
+  <path class="line" d="M 700 748 L 618 704"/>
+  <text x="651" y="720" class="tiny">yes</text>
+
+  <path class="line" d="M 489 760 L 489 818"/>
+  <path class="line" d="M 360 876 L 290 876"/>
+  <text x="314" y="861" class="tiny">yes</text>
+  <path class="line" d="M 618 876 L 700 876"/>
+  <text x="650" y="861" class="tiny">no</text>
+
+  <path class="line dash" d="M 848 818 C 1010 746, 1086 449, 1177 338"/>
+  <text x="1010" y="594" class="tiny">second sync after candidate</text>
+
+  <rect x="72" y="960" width="1250" height="38" class="node"/>
+  <text x="92" y="984" class="small">Invariant: rejected syncs do not move main, do not modify another developer's worktree, and keep user changes recoverable in the owner worktree or Cocodex refs.</text>
+</svg>

@@ -3,6 +3,12 @@
 This document explains Cocodex's implementation model for maintainers. The
 user-facing workflow is documented in the root [README.md](../README.md).
 
+For a compact visual overview, see the SVG system diagrams:
+[system overview](diagrams/cocodex-system-overview.svg),
+[sync decision flow](diagrams/cocodex-sync-decision-flow.svg),
+[semantic merge loop](diagrams/cocodex-semantic-merge-loop.svg), and
+[safety invariants](diagrams/cocodex-safety-invariants.svg).
+
 ## Architecture
 
 Cocodex is a single-machine orchestration layer around Git and Codex. Its main
@@ -132,6 +138,13 @@ the normal semantic fusion task. Publish paths preflight the project
 repository's main worktree; dirty or unsafe main worktrees cause the current
 `sync` request to be refused before Cocodex moves `main`. The session work
 remains in the managed worktree or in a snapshot ref for retry.
+
+`cocodex sync --force` sets `force_clean_main` on the protocol message. Before
+any publish preflight, the daemon may discard tracked modified or staged files
+in the project main worktree with an internal `git reset --hard HEAD`. This is
+only a main-worktree cleanup step; it never resets the managed session worktree.
+The daemon still refuses untracked files and unsafe Git states, because those
+cannot be classified as disposable generated output safely.
 
 No publish path fast-forwards clean idle sessions. Other developers' worktrees
 move only when those developers run `cocodex sync` from their own managed

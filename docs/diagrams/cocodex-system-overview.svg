@@ -1,0 +1,158 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="880" viewBox="0 0 1440 880" role="img" aria-labelledby="title desc">
+  <title id="title">Fig. 1: Cocodex system overview</title>
+  <desc id="desc">A paper-style system overview of Cocodex, showing developer Codex sessions, managed worktrees, the daemon control plane, local main, Git guards, and best-effort remote synchronization.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="11" markerHeight="11" refX="9" refY="5.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 5.5 L 0 11 z" fill="#29384d"/>
+    </marker>
+    <marker id="arrowBlue" markerWidth="11" markerHeight="11" refX="9" refY="5.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 5.5 L 0 11 z" fill="#2f5f9f"/>
+    </marker>
+    <style><![CDATA[
+      text { font-family: "Inter", "IBM Plex Sans", Arial, sans-serif; fill: #172033; }
+      .title { font-size: 26px; font-weight: 700; letter-spacing: 0; }
+      .subtitle { font-size: 14px; fill: #5d6878; }
+      .label { font-size: 15px; font-weight: 700; }
+      .small { font-size: 12px; fill: #5d6878; }
+      .tiny { font-size: 11px; fill: #5d6878; }
+      .mono { font-family: "SFMono-Regular", Consolas, monospace; font-size: 12px; fill: #263448; }
+      .box { fill: #ffffff; stroke: #7d8798; stroke-width: 1.4; rx: 7; }
+      .panel { fill: #f7f8fb; stroke: #9aa3b2; stroke-width: 1.2; rx: 8; }
+      .blue { fill: #edf4ff; stroke: #2f5f9f; }
+      .green { fill: #eef8f1; stroke: #3c7a4f; }
+      .amber { fill: #fff7e7; stroke: #a66b1f; }
+      .red { fill: #fff1f1; stroke: #a84747; }
+      .line { fill: none; stroke: #29384d; stroke-width: 1.6; marker-end: url(#arrow); }
+      .blueLine { fill: none; stroke: #2f5f9f; stroke-width: 1.7; marker-end: url(#arrowBlue); }
+      .dash { stroke-dasharray: 6 5; }
+      .thin { stroke-width: 1.15; }
+    ]]></style>
+  </defs>
+
+  <text x="56" y="54" class="title">Cocodex: server-local orchestration for asynchronous Codex collaboration</text>
+  <text x="56" y="79" class="subtitle">Only the active developer's managed worktree and local main move during sync; other sessions advance only when their owner runs cocodex sync.</text>
+
+  <rect x="48" y="112" width="1344" height="706" class="panel"/>
+  <text x="70" y="141" class="label">Shared project repository on one server</text>
+  <text x="70" y="163" class="small">The server-local Git state is authoritative. Cocodex may force-sync selected refs to a configured remote after local success.</text>
+
+  <rect x="78" y="202" width="258" height="448" class="panel"/>
+  <text x="99" y="231" class="label">Developer tmux panes</text>
+  <text x="99" y="253" class="small">Each pane runs one managed Codex session.</text>
+
+  <g transform="translate(100,282)">
+    <rect width="194" height="82" class="box blue"/>
+    <text x="16" y="25" class="label">Alice Codex</text>
+    <text x="16" y="47" class="mono">cocodex join alice</text>
+    <text x="16" y="66" class="small">SessionAgent + heartbeat</text>
+  </g>
+  <g transform="translate(100,393)">
+    <rect width="194" height="82" class="box blue"/>
+    <text x="16" y="25" class="label">Bob Codex</text>
+    <text x="16" y="47" class="mono">cocodex join bob</text>
+    <text x="16" y="66" class="small">Own control socket</text>
+  </g>
+  <g transform="translate(100,504)">
+    <rect width="194" height="82" class="box blue"/>
+    <text x="16" y="25" class="label">Other Codex</text>
+    <text x="16" y="47" class="mono">!cocodex sync</text>
+    <text x="16" y="66" class="small">Owner-initiated only</text>
+  </g>
+
+  <rect x="400" y="202" width="288" height="448" class="panel"/>
+  <text x="421" y="231" class="label">Managed worktrees</text>
+  <text x="421" y="253" class="small">Created under .cocodex/worktrees/.</text>
+
+  <g transform="translate(426,285)">
+    <rect width="220" height="76" class="box"/>
+    <text x="14" y="24" class="label">alice worktree</text>
+    <text x="14" y="45" class="mono">branch cocodex/alice</text>
+    <text x="14" y="63" class="small">Generated AGENTS.md is ignored</text>
+  </g>
+  <g transform="translate(426,396)">
+    <rect width="220" height="76" class="box"/>
+    <text x="14" y="24" class="label">bob worktree</text>
+    <text x="14" y="45" class="mono">branch cocodex/bob</text>
+    <text x="14" y="63" class="small">Local feature state stays here</text>
+  </g>
+  <g transform="translate(426,507)">
+    <rect width="220" height="76" class="box"/>
+    <text x="14" y="24" class="label">session worktrees</text>
+    <text x="14" y="45" class="mono">cocodex/&lt;name&gt;</text>
+    <text x="14" y="63" class="small">No cross-session mutation</text>
+  </g>
+
+  <rect x="752" y="192" width="356" height="470" class="panel"/>
+  <text x="776" y="221" class="label">Cocodex control plane</text>
+  <text x="776" y="243" class="small">One daemon listens on a Unix socket and records state in SQLite.</text>
+
+  <g transform="translate(780,277)">
+    <rect width="296" height="86" class="box green"/>
+    <text x="16" y="26" class="label">cocodex daemon</text>
+    <text x="16" y="47" class="small">register, heartbeat, ready_to_integrate, fusion_done</text>
+    <text x="16" y="66" class="small">prints event log in the daemon terminal</text>
+  </g>
+  <g transform="translate(780,389)">
+    <rect width="137" height="94" class="box amber"/>
+    <text x="14" y="25" class="label">State DB</text>
+    <text x="14" y="47" class="mono">state.sqlite</text>
+    <text x="14" y="66" class="small">sessions, lock,</text>
+    <text x="14" y="82" class="small">events, metadata</text>
+  </g>
+  <g transform="translate(939,389)">
+    <rect width="137" height="94" class="box amber"/>
+    <text x="14" y="25" class="label">Task files</text>
+    <text x="14" y="47" class="mono">tasks/*.md</text>
+    <text x="14" y="66" class="small">prompt and</text>
+    <text x="14" y="82" class="small">validation report</text>
+  </g>
+  <g transform="translate(780,510)">
+    <rect width="296" height="82" class="box red"/>
+    <text x="16" y="26" class="label">Integration lock</text>
+    <text x="16" y="48" class="small">Exactly one publish or semantic task at a time.</text>
+    <text x="16" y="66" class="small">Concurrent sync is refused with owner action.</text>
+  </g>
+
+  <rect x="1160" y="222" width="178" height="132" class="box green"/>
+  <text x="1180" y="251" class="label">Local main</text>
+  <text x="1180" y="274" class="mono">refs/heads/main</text>
+  <text x="1180" y="294" class="small">Moved only by Cocodex</text>
+  <text x="1180" y="313" class="small">through fast-forward</text>
+  <text x="1180" y="332" class="small">after verification</text>
+
+  <rect x="1160" y="408" width="178" height="112" class="box red"/>
+  <text x="1180" y="437" class="label">Git guards</text>
+  <text x="1180" y="460" class="small">reference transaction</text>
+  <text x="1180" y="479" class="small">pre-push, rebase, merge</text>
+  <text x="1180" y="498" class="small">block direct main writes</text>
+
+  <rect x="1160" y="577" width="178" height="112" class="box blue"/>
+  <text x="1180" y="606" class="label">Remote origin</text>
+  <text x="1180" y="629" class="small">Best-effort scoped push</text>
+  <text x="1180" y="648" class="small">main + current session</text>
+  <text x="1180" y="667" class="small">+ recovery refs</text>
+
+  <path class="line" d="M 294 323 C 340 323, 364 323, 426 323"/>
+  <text x="328" y="308" class="tiny">edits</text>
+  <path class="line" d="M 294 434 C 340 434, 364 434, 426 434"/>
+  <path class="line" d="M 294 545 C 340 545, 364 545, 426 545"/>
+
+  <path class="blueLine" d="M 646 323 C 697 323, 724 323, 780 323"/>
+  <text x="674" y="307" class="tiny">sync request</text>
+  <path class="blueLine" d="M 780 548 C 690 548, 690 472, 646 472"/>
+  <text x="663" y="529" class="tiny">freeze / task prompt</text>
+
+  <path class="line thin dash" d="M 930 363 L 930 389"/>
+  <path class="line thin dash" d="M 1008 363 L 1008 389"/>
+  <path class="line" d="M 1076 318 C 1114 318, 1124 288, 1160 288"/>
+  <text x="1091" y="288" class="tiny">publish</text>
+  <path class="line thin dash" d="M 1160 320 C 1128 360, 1126 421, 1160 461"/>
+  <text x="1086" y="395" class="tiny">guarded</text>
+  <path class="blueLine dash" d="M 1249 354 L 1249 577"/>
+  <text x="1262" y="474" class="tiny">best effort</text>
+
+  <rect x="78" y="694" width="1260" height="78" class="box"/>
+  <text x="101" y="723" class="label">Operational commands</text>
+  <text x="102" y="748" class="small">Developer path: cocodex join &lt;name&gt;, then run cocodex sync from the managed worktree. Cocodex pastes semantic prompts into tmux but does not press Enter.</text>
+  <text x="102" y="767" class="small">Operator path: cocodex daemon, status, log, delete &lt;name&gt;. Delete is for retired sessions only, not active sync recovery.</text>
+</svg>

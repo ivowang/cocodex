@@ -108,6 +108,23 @@ def format_failure_handling(
                 "- Publish through `cocodex sync` from the managed worktree.",
             ]
         )
+    elif "main worktree is dirty" in reason_lower:
+        lines.extend(
+            [
+                "- The project main worktree has local tracked changes outside any Cocodex session.",
+                "- If those changes are disposable generated files, rerun from this managed worktree with `cocodex sync --force`.",
+                "- `--force` does not discard this session's worktree changes.",
+                "- If the main worktree changes are real work, move them into a managed Cocodex session before syncing.",
+            ]
+        )
+    elif "main worktree has untracked files" in reason_lower:
+        lines.extend(
+            [
+                "- `cocodex sync --force` refuses to delete untracked files automatically.",
+                "- Inspect the untracked files in the project main worktree.",
+                "- Move, delete, or intentionally commit them outside the developer workflow, then retry `cocodex sync`.",
+            ]
+        )
     else:
         lines.extend(
             [

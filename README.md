@@ -6,6 +6,12 @@ cocodex coordinates multiple Codex sessions that share one Git repository on one
 server account. It gives every developer an isolated managed worktree, then
 serializes the moment when a developer's work becomes the next `main`.
 
+Architecture diagrams are available under [docs/diagrams](docs/diagrams/):
+[system overview](docs/diagrams/cocodex-system-overview.svg),
+[sync decision flow](docs/diagrams/cocodex-sync-decision-flow.svg),
+[semantic merge loop](docs/diagrams/cocodex-semantic-merge-loop.svg), and
+[safety invariants](docs/diagrams/cocodex-safety-invariants.svg).
+
 ## Core Rule
 
 For day-to-day collaboration, a developer only needs one Cocodex command:
@@ -353,6 +359,26 @@ blocker in its session output. Cocodex keeps the active task in `fusing`, keeps
 the lock with that session, and rejects later `sync` attempts until the same
 session has a committed candidate and validation report.
 
+### Disposable Dirty Main Worktree
+
+Every publish path requires the project repository's main worktree to be clean.
+Dirty files in that checkout are not treated as another developer branch,
+because they have no Cocodex owner, snapshot, validation report, or base commit.
+
+If the dirty main-worktree files are disposable tracked outputs, such as
+tracked caches or generated run logs, the developer may explicitly discard them
+while syncing from their managed worktree:
+
+```bash
+cocodex sync --force
+```
+
+`--force` discards only tracked modified or staged files in the project main
+worktree before continuing the normal sync path. It does not discard the
+current session worktree's changes. It still refuses untracked files and unsafe
+Git states such as merge, rebase, cherry-pick, or index-lock state; inspect
+those manually before retrying.
+
 ## Normal Example
 
 Alice and Bob both start Codex through Cocodex. Alice implements feature A; Bob
@@ -458,8 +484,11 @@ Common cases:
   remains `fusing`; the same Codex session fixes the issue and runs
   `cocodex sync` again.
 - Main worktree dirty or unsafe: clean the project repository's main worktree,
-  then retry `cocodex sync` from the managed session worktree. Cocodex has not
-  moved `main` or discarded the session work.
+  then retry `cocodex sync` from the managed session worktree. If the dirty
+  main-worktree files are disposable tracked outputs, retry with
+  `cocodex sync --force`; this discards only tracked main-worktree changes and
+  does not discard the session worktree. Untracked files and unsafe Git states
+  must be inspected manually.
 - `version mismatch`: restart that developer's `cocodex join <name>` after the
   installed Cocodex package has been upgraded.
 - Remote sync warning: local publish already completed; fix network or Git

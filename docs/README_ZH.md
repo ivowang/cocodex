@@ -4,6 +4,12 @@
 
 cocodex 用于协调同一个服务器账号下、同一个 Git 仓库里的多个 Codex session。每个开发者都有独立的 managed worktree，Cocodex 负责把这些 worktree 写入 `main` 的时刻串行化。
 
+系统框图位于 [docs/diagrams](diagrams/)：
+[总览架构](diagrams/cocodex-system-overview.svg)、
+[sync 决策流](diagrams/cocodex-sync-decision-flow.svg)、
+[语义融合闭环](diagrams/cocodex-semantic-merge-loop.svg) 和
+[安全不变量](diagrams/cocodex-safety-invariants.svg)。
+
 ## 核心规则
 
 在日常协作中，开发者只需要知道一个 Cocodex 命令：
@@ -271,6 +277,24 @@ cocodex sync
 
 如果 task 无法安全完成，Codex 应该停下来，在 session 输出中说明 blocker。Cocodex 会让 task 保持 `fusing` 并继续由该 session 持有 lock；同一个 session 修好 candidate、validation 或 worktree 状态后，再次运行 `cocodex sync`。
 
+### 可丢弃的 dirty main worktree
+
+所有 publish 路径都要求项目仓库的 main worktree 是 clean 的。main checkout
+里的 dirty 文件不会被当成另一个开发分支参与语义融合，因为这些文件没有
+Cocodex owner、snapshot、validation report 或明确 base commit。
+
+如果 main worktree 里的 dirty 内容只是可丢弃的 tracked 输出，例如已经被
+Git 跟踪的 cache 或运行日志，开发者可以在自己的 managed worktree 中明确执行：
+
+```bash
+cocodex sync --force
+```
+
+`--force` 只会在继续正常 sync 流程前丢弃项目 main worktree 中 tracked 的
+modified 或 staged 文件。它不会丢弃当前 session worktree 里的改动。遇到
+untracked 文件，或 merge、rebase、cherry-pick、index lock 等 unsafe Git
+状态时，`--force` 仍然会拒绝；这些情况需要人工检查后再重试。
+
 ## 正常例子
 
 Alice 和 Bob 都通过 Cocodex 启动 Codex。Alice 实现 feature A，Bob 实现 feature B。两个分支都不会被 daemon 自动集成。
@@ -338,7 +362,7 @@ Cocodex 的原则是宁可停下来，也不猜测：
 
 - `integration busy`：不要移动当前 worktree；等当前 lock owner 完成后，在同一个 worktree 中重试 `cocodex sync`。如果提示 lock owner disconnected，让该开发者先运行 `cocodex join <name>`，然后从自己的 managed worktree 中运行 `cocodex sync`。
 - active task 因 candidate 缺失、worktree dirty、validation report 缺失，或 task/snapshot/base handle 缺失而被拒绝：task 保持 `fusing`，同一个 Codex session 修复问题，然后再次运行 `cocodex sync`。
-- main worktree dirty 或 unsafe：清理项目仓库的 main worktree，然后从 managed session worktree 重试 `cocodex sync`。Cocodex 没有移动 `main`，也没有丢弃 session 的工作。
+- main worktree dirty 或 unsafe：清理项目仓库的 main worktree，然后从 managed session worktree 重试 `cocodex sync`。如果 dirty 内容只是可丢弃的 tracked 输出，可以执行 `cocodex sync --force`；它只会丢弃 main worktree 里的 tracked 改动，不会丢弃当前 session worktree 的工作。untracked 文件和 unsafe Git 状态需要人工检查。
 - `version mismatch`：升级安装包后，重启该开发者的 `cocodex join <name>`。
 - remote sync warning：本地 publish 已完成；之后修复网络或 Git 认证，让后续 `cocodex sync` 自动重试。
 - `Cocodex protects main`：Git hook 阻止了直接操作 `main`。继续在 managed worktree 中开发，并通过 `cocodex sync` 发布。

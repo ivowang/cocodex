@@ -2,6 +2,12 @@
 
 本文面向 Cocodex 项目的维护者，说明当前实现模型和关键状态机。用户使用流程请阅读根目录的 [README.md](../README.md) 或 [中文 README](README_ZH.md)。
 
+如果需要先看整体视觉说明，可以阅读 SVG 系统框图：
+[总览架构](diagrams/cocodex-system-overview.svg)、
+[sync 决策流](diagrams/cocodex-sync-decision-flow.svg)、
+[语义融合闭环](diagrams/cocodex-semantic-merge-loop.svg) 和
+[安全不变量](diagrams/cocodex-safety-invariants.svg)。
+
 ## 架构
 
 Cocodex 是围绕 Git 和 Codex 构建的单机协作编排层，主要由以下部分组成：
@@ -66,6 +72,12 @@ cocodex sync
 daemon 不会自动把 dirty session 入队。dirty work 会留在本地，直到 owner 显式运行 `sync`。
 
 direct publish 只允许用于该 session 记录的 `last_seen_main` 仍然等于当前本地 `main` 的情况。如果 worktree 有未提交修改，Cocodex 会用该 session 配置的 Git identity 创建 snapshot commit，然后 fast-forward 本地 `main`。如果另一个 session 已经先发布，条件会变为 false。后面的 session 会拿到 integration lock，snapshot 自己的工作，并先尝试把最新 `main` 普通 Git merge 到这个 snapshot 上。Git merge candidate 只有在 worktree clean、candidate 同时包含最新 `main` 和 session snapshot、且 candidate diff 通过 `git diff --check` 时才会被接受。如果这个轻量路径失败，Cocodex 会把 worktree 重置到最新 `main` 并进入正常语义融合 task。所有 publish 路径都会预检查项目仓库 main worktree；如果 main worktree dirty 或存在 unsafe Git state，本次 `sync` 会在移动 `main` 前被拒绝，session 工作仍保留在 managed worktree 或 snapshot ref 中以便重试。
+
+`cocodex sync --force` 会在协议消息中设置 `force_clean_main`。daemon 在任何
+publish preflight 前，可以用内部 `git reset --hard HEAD` 丢弃项目 main
+worktree 中 tracked 的 modified 或 staged 文件。这只是 main worktree cleanup；
+它不会 reset managed session worktree。daemon 仍然会拒绝 untracked 文件和
+unsafe Git state，因为这些内容无法安全判断为可丢弃的生成输出。
 
 任何 publish 路径都不会 fast-forward clean idle sessions。其他开发者的 worktree 只有在他们自己从 managed worktree 运行 `cocodex sync` 时才会移动。
 

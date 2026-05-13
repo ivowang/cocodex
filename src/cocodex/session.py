@@ -472,6 +472,7 @@ def send_completion(
     socket_path: Path,
     session: SessionRecord,
     *,
+    force_clean_main: bool = False,
     timeout: float = 120.0,
 ) -> dict:
     if session.active_task is None:
@@ -481,5 +482,7 @@ def send_completion(
         "session": session.name,
         "task_id": session.active_task,
     }
+    if force_clean_main:
+        message["force_clean_main"] = True
     raw = send_message(socket_path, message, timeout=timeout)
     return decode_message(raw)
